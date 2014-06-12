@@ -197,7 +197,6 @@ extern "C" {
         int iDead = (kind&0xFF000000);
         if ( iDead != 0 && iDead != 0xDE000000 ) {
             printf("%s:%d ERROR   Invalid liveness value of an object in obj_skip - kind[%u] \n", __FILE__, __LINE__, (unsigned int)(kind) );
-            searchMemoryForAddress(base);
             __builtin_trap();
         };
 #endif
