@@ -24,29 +24,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-       
+
 //
 // (C) 2004 Christian E. Schafmeister
 //
 
+#include <clasp/core/mainBoostPython.h>
 
+#include <vector3.h>
+#include <matrix.h>
+#include <virtualSphere.h>
 
-#include "mainBoostPython.h"
-
-
-#include "vector3.h"
-#include "matrix.h"
-#include "virtualSphere.h"
-
-#include "exceptions.h"
+#include <clasp/core/exceptions.h>
 //#i n c l u d e "execContext.h"
-#include "pythonCallback.h"
+#include <clasp/core/pythonCallback.h>
 
+#include <mySaxInterface.h>
 
+#include <xmlAggregate.h>
 
-#include "mySaxInterface.h"
-
-#include "xmlAggregate.h"
-
-
-#include "quickDom.h"
+#include <quickDom.h>

@@ -25,37 +25,30 @@ THE SOFTWARE.
 */
 /* -^- */
 
-#include "foundation.h"
-#include "object.h"
-#include "lisp.h"
-#include "symbol.h"
-#include "commonLispUserPackage.h"
-#include "multipleValues.h"
-#include "package.h"
+#include <clasp/core/foundation.h>
+#include <clasp/core/object.h>
+#include <clasp/core/lisp.h>
+#include <clasp/core/symbol.h>
+#include <clasp/core/commonLispUserPackage.h>
+#include <clasp/core/multipleValues.h>
+#include <clasp/core/package.h>
 
-namespace cluser
-{
+namespace cluser {
 
-    core::Package_sp globalCommonLispUserPkg;
-
+core::Package_sp globalCommonLispUserPkg;
 
 #pragma GCC visibility push(default)
 #define CommonLispUserPkg_SYMBOLS
-#define DO_SYMBOL(cname,idx,pkgName,lispName,export) core::Symbol_sp cname = UNDEFINED_SYMBOL;
-#include "symbols_scraped_inc.h"
+#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
+#include SYMBOLS_SCRAPED_INC_H
 #undef DO_SYMBOL
 #undef CommonLispUserPkg_SYMBOLS
 #pragma GCC visibility pop
 
-
-
-    void initialize_commonLispUserPackage()
-    {
-	list<string> lnicknames = {"CL-USER", "USER"};
-	list<string> luse = { "CL" };
-	globalCommonLispUserPkg = _lisp->makePackage("COMMON-LISP-USER",lnicknames,luse);
-	// We don't have to create the COMMONLISPUSER symbols here - it's done in bootStrapCoreSymbolMap
-    }
-
-
+void initialize_commonLispUserPackage() {
+  list<string> lnicknames = {"CL-USER", "USER"};
+  list<string> luse = {"CL"};
+  globalCommonLispUserPkg = _lisp->makePackage("COMMON-LISP-USER", lnicknames, luse);
+  // We don't have to create the COMMONLISPUSER symbols here - it's done in bootStrapCoreSymbolMap
+}
 };

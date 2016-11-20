@@ -25,37 +25,31 @@ THE SOFTWARE.
 */
 /* -^- */
 
-#include "foundation.h"
-#include "object.h"
-#include "lisp.h"
-#include "symbol.h"
-#include "closPackage.h"
-#include "multipleValues.h"
-#include "package.h"
+#include <clasp/core/foundation.h>
+#include <clasp/core/object.h>
+#include <clasp/core/lisp.h>
+#include <clasp/core/symbol.h>
+#include <clasp/core/closPackage.h>
+#include <clasp/core/multipleValues.h>
+#include <clasp/core/package.h>
 
-namespace clos
-{
+namespace clos {
 
 #pragma GCC visibility push(default)
 #define ClosPkg_SYMBOLS
-#define DO_SYMBOL(cname,idx,pkgName,lispName,export) core::Symbol_sp cname = UNDEFINED_SYMBOL;
-#include "symbols_scraped_inc.h"
+#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
+#include SYMBOLS_SCRAPED_INC_H
 #undef DO_SYMBOL
 #undef ClosPkg_SYMBOLS
 #pragma GCC visibility pop
 
+SYMBOL_SC_(ClosPkg, aSingleClosSymbol);
+SYMBOL_EXPORT_SC_(ClosPkg, class_precedence_list);
 
-    SYMBOL_SC_(ClosPkg,aSingleClosSymbol);
-
-
-
-    void initialize_closPackage()
-    {
-	list<string> lnicknames;
-	list<string> luse = {"COMMON-LISP"};
-	_lisp->makePackage("CLOS",lnicknames,luse);
-	// We don't have to create the CLOS symbols here - it's done in bootStrapCoreSymbolMap
-    }
-
-
+void initialize_closPackage() {
+  list<string> lnicknames;
+  list<string> luse = {"COMMON-LISP"};
+  _lisp->makePackage("CLOS", lnicknames, luse);
+  // We don't have to create the CLOS symbols here - it's done in bootStrapCoreSymbolMap
+}
 };

@@ -24,52 +24,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#include "userData.h"
-#include "wrappers.h"
+#include <clasp/core/userData.h>
+#include <clasp/core/wrappers.h>
 
 namespace core {
 
+EXPOSE_CLASS(core, LightUserData_O);
 
-    EXPOSE_CLASS(core,LightUserData_O);
+void LightUserData_O::exposeCando(core::Lisp_sp e) {
+  class_<LightUserData_O>();
+}
 
-
-    void LightUserData_O::exposeCando(core::Lisp_sp e)
-    {
-        class_<LightUserData_O>()
-            ;
-    }
-
-    void LightUserData_O::exposePython(core::Lisp_sp lisp)
-    {_G();
-#ifdef	USEBOOSTPYTHON //[
-	PYTHON_CLASS(CorePkg,LightUserData,"","",_lisp)
-            ;
+void LightUserData_O::exposePython(core::Lisp_sp lisp) {
+  _G();
+#ifdef USEBOOSTPYTHON //[
+  PYTHON_CLASS(CorePkg, LightUserData, "", "", _lisp);
 #endif //]
-    }
+}
 
+EXPOSE_CLASS(core, UserData_O);
 
+void UserData_O::exposeCando(core::Lisp_sp e) {
+  class_<UserData_O>();
+}
 
-    EXPOSE_CLASS(core,UserData_O);
-
-
-
-
-    void UserData_O::exposeCando(core::Lisp_sp e)
-    {
-        class_<UserData_O>()
-            ;
-    }
-
-    void UserData_O::exposePython(core::Lisp_sp lisp)
-    {_G();
-#ifdef	USEBOOSTPYTHON //[
-	PYTHON_CLASS(CorePkg,UserData,"","",_lisp)
-            ;
+void UserData_O::exposePython(core::Lisp_sp lisp) {
+  _G();
+#ifdef USEBOOSTPYTHON //[
+  PYTHON_CLASS(CorePkg, UserData, "", "", _lisp);
 #endif //]
-    }
-
-
-
-
-
+}
 };

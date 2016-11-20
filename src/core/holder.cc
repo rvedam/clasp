@@ -24,7 +24,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-       
 
-#include "holder.h"
-#include "cons.h"
+#include <clasp/core/holder.h>
+#include <clasp/core/cons.h>

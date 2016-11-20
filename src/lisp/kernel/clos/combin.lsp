@@ -81,9 +81,9 @@
 #+compare(print "combin.lsp 81")
 (defun combine-method-functions (method rest-methods)
   (declare (si::c-local))
-  #'(lambda (.combined-method-args. no-next-methods)
+  #'(lambda (args no-next-methods)
       (declare (ignorable no-next-methods))
-      (funcall method .combined-method-args. rest-methods)))
+      (funcall method args rest-methods)))
 
 #+compare(print "combin.lsp 88")
 (defmacro call-method (method &optional rest-methods)
@@ -203,7 +203,7 @@
 (defparameter *method-combinations* (make-hash-table :size 32 :test 'eq))
 
 
-#-brcl
+#-clasp
 (defun search-method-combination (name)
   (mp:with-lock (*method-combinations-lock*)
     (or (gethash name *method-combinations*)
@@ -212,12 +212,12 @@
 
 #+compare(print "combin.lsp 216")
 
-#+brcl
+#+clasp
 (defun search-method-combination (name)
     (or (gethash name *method-combinations*)
 	(error "~A does not name a method combination" name)))
 
-#-brcl
+#-clasp
 (defun install-method-combination (name function)
   (mp:with-lock (*method-combinations-lock*)
     (setf (gethash name *method-combinations*) function))
@@ -225,7 +225,7 @@
 
 #+compare(print "combin.lsp 229")
 
-#+brcl
+#+clasp
 (defun install-method-combination (name function)
   (setf (gethash name *method-combinations*) function)
   name)
@@ -276,11 +276,11 @@
 	   (error "~S is not a valid DEFINE-METHOD-COMBINATION form"
 		  form)))
     (destructuring-bind (name lambda-list method-groups &rest body &aux
-			 (group-names '())
-			 (group-checks '())
-			 (group-after '())
-			 (generic-function '.generic-function.)
-			 (method-arguments '()))
+			      (group-names '())
+			      (group-checks '())
+			      (group-after '())
+			      (generic-function '.generic-function.)
+			      (method-arguments '()))
 	form
       (unless (symbolp name) (syntax-error))
       (let ((x (first body)))
@@ -293,27 +293,27 @@
 	    (syntax-error))))
       (dolist (group method-groups)
 	(destructuring-bind (group-name predicate &key description
-				  (order :most-specific-first) (required nil))
+					(order :most-specific-first) (required nil))
 	    group
 	  (if (symbolp group-name)
 	      (push group-name group-names)
 	      (syntax-error))
 	  (let ((condition
-		(cond ((eql predicate '*) 'T)
-		      ((and predicate (symbolp predicate))
-                       `(,predicate .METHOD-QUALIFIERS.))
-		      ((and (listp predicate)
-			    (let* ((q (last predicate 0))
-				   (p (copy-list (butlast predicate 0))))
-			      (when (every #'symbolp p)
-				(if (eql q '*)
-				    `(every #'equal ',p .METHOD-QUALIFIERS.)
-				    `(equal ',p .METHOD-QUALIFIERS.))))))
-		      (t (syntax-error)))))
+		 (cond ((eql predicate '*) 'T)
+		       ((and predicate (symbolp predicate))
+			`(,predicate .METHOD-QUALIFIERS.))
+		       ((and (listp predicate)
+			     (let* ((q (last predicate 0))
+				    (p (copy-list (butlast predicate 0))))
+			       (when (every #'symbolp p)
+				 (if (eql q '*)
+				     `(every #'equal ',p .METHOD-QUALIFIERS.)
+				     `(equal ',p .METHOD-QUALIFIERS.))))))
+		       (t (syntax-error)))))
 	    (push `(,condition (push .METHOD. ,group-name)) group-checks))
 	  (when required
 	    (push `(unless ,group-name
-		    (error "Method combination: ~S. No methods ~
+		     (error "Method combination: ~S. No methods ~
 			    in required group ~S." ,name ,group-name))
 		  group-after))
 	  (case order
@@ -327,16 +327,29 @@
                                            (setf ,group-name (nreverse ,group-name)))
                                         group-after)))))))
       `(install-method-combination ',name
-	  (ext::lambda-block ,name (,generic-function .methods-list. ,@lambda-list)
-	    (let (,@group-names)
-	      (dolist (.method. .methods-list.)
-		(let ((.method-qualifiers. (method-qualifiers .method.)))
-		  (cond ,@(nreverse group-checks)
-			(t (invalid-method-error .method.
-			     "Method qualifiers ~S are not allowed in the method~
+				   #+ecl(ext::lambda-block ,name (,generic-function .methods-list. ,@lambda-list)
+							   (let (,@group-names)
+							     (dolist (.method. .methods-list.)
+							       (let ((.method-qualifiers. (method-qualifiers .method.)))
+								 (cond ,@(nreverse group-checks)
+								       (t (invalid-method-error .method.
+												"Method qualifiers ~S are not allowed in the method~
 			      combination ~S." .method-qualifiers. ,name)))))
-	      ,@group-after
-	      (effective-method-function (progn ,@body) t))))
+							     ,@group-after
+							     (effective-method-function (progn ,@body) t)))
+				   #+clasp(lambda (,generic-function .methods-list. ,@lambda-list)
+					    (declare (core:lambda-name ,name))
+					    (block ,name 
+					      (let (,@group-names)
+						(dolist (.method. .methods-list.)
+						  (let ((.method-qualifiers. (method-qualifiers .method.)))
+						    (cond ,@(nreverse group-checks)
+							  (t (invalid-method-error .method.
+										   "Method qualifiers ~S are not allowed in the method~
+			      combination ~S." .method-qualifiers. ,name)))))
+						,@group-after
+						(effective-method-function (progn ,@body) t))))
+				   )
       )))
 
 #+compare(print "combin.lsp 345")
@@ -366,7 +379,7 @@
 ;; during compilation of the full clasp source code.
 ;; I don't use compiler macros anyway so I'll feature this out
 #-clasp
-(eval-when (compile #+brcl-boot :load-toplevel)
+(eval-when (compile #+clasp-boot :load-toplevel)
   (let* ((class (find-class 'method-combination)))
     (define-compiler-macro method-combination-compiler (o)
       `(si::instance-ref ,o ,(slot-definition-location (gethash 'compiler (slot-table class)))))
@@ -409,15 +422,26 @@
 ;;
 #+compare(print "MLOG About to install-method-combination")
 (install-method-combination 'standard 'standard-compute-effective-method)
-(eval '(progn
-	(define-method-combination progn :identity-with-one-argument t)
-	(define-method-combination and :identity-with-one-argument t)
-	(define-method-combination max :identity-with-one-argument t)
-	(define-method-combination + :identity-with-one-argument t)
-	(define-method-combination nconc :identity-with-one-argument t)
-	(define-method-combination append :identity-with-one-argument nil)
-	(define-method-combination list :identity-with-one-argument nil)
-	(define-method-combination min :identity-with-one-argument t)
-	(define-method-combination or :identity-with-one-argument t)))
+#+ecl(eval '(progn
+             (define-method-combination progn :identity-with-one-argument t)
+             (define-method-combination and :identity-with-one-argument t)
+             (define-method-combination max :identity-with-one-argument t)
+             (define-method-combination + :identity-with-one-argument t)
+             (define-method-combination nconc :identity-with-one-argument t)
+             (define-method-combination append :identity-with-one-argument nil)
+             (define-method-combination list :identity-with-one-argument nil)
+             (define-method-combination min :identity-with-one-argument t)
+             (define-method-combination or :identity-with-one-argument t)))
+
+#+clasp(progn
+         (define-method-combination progn :identity-with-one-argument t)
+         (define-method-combination and :identity-with-one-argument t)
+         (define-method-combination max :identity-with-one-argument t)
+         (define-method-combination + :identity-with-one-argument t)
+         (define-method-combination nconc :identity-with-one-argument t)
+         (define-method-combination append :identity-with-one-argument nil)
+         (define-method-combination list :identity-with-one-argument nil)
+         (define-method-combination min :identity-with-one-argument t)
+         (define-method-combination or :identity-with-one-argument t))
 
 #+compare( print "MLOG ****** Done with combin.lsp ******")

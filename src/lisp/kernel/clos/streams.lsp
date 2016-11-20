@@ -540,7 +540,7 @@
 
 (defmethod stream-read-sequence ((stream ansi-stream) sequence
 				 &optional (start 0) (end nil))
-  (si:do-read-sequence stream sequence start end))
+  (si::do-read-sequence stream sequence start end))
 
 (defmethod stream-read-sequence ((stream t) sequence &optional start end)
   (declare (ignore sequence start end))
@@ -688,7 +688,7 @@
 
 ;;; Setup
 
-(eval-when (:compile-toplevel :execute #+brcl-boot :load-toplevel)
+(eval-when (:compile-toplevel :execute #+clasp!-boot :load-toplevel)
   (defconstant +conflicting-symbols+ '(cl:close cl:stream-element-type cl:input-stream-p
 				       cl:open-stream-p cl:output-stream-p cl:streamp)))
 

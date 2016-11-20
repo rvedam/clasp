@@ -25,33 +25,32 @@ THE SOFTWARE.
 */
 /* -^- */
 
-#include "foundation.h"
-#include "object.h"
-#include "lisp.h"
-#include "symbol.h"
-#include "commonLispPackage.h"
-#include "multipleValues.h"
-#include "package.h"
+#include <clasp/core/foundation.h>
+#include <clasp/core/object.h>
+#include <clasp/core/lisp.h>
+#include <clasp/core/symbol.h>
+#include <clasp/core/commonLispPackage.h>
+#include <clasp/core/multipleValues.h>
+#include <clasp/core/package.h>
 
-namespace cl
-{
+namespace cl {
 
-    SYMBOL_EXPORT_SC_(ClPkg,length);
-    SYMBOL_EXPORT_SC_(ClPkg,condition);
-    SYMBOL_EXPORT_SC_(ClPkg,defvar);
-    SYMBOL_EXPORT_SC_(ClPkg,defconstant);
-    SYMBOL_EXPORT_SC_(ClPkg,defparameter);
-    SYMBOL_EXPORT_SC_(ClPkg,intersection);
-    SYMBOL_EXPORT_SC_(ClPkg,union);
-    SYMBOL_EXPORT_SC_(ClPkg,remove);
-    SYMBOL_EXPORT_SC_(ClPkg,pprint_dispatch);
-    SYMBOL_EXPORT_SC_(ClPkg,fileStream);
+SYMBOL_EXPORT_SC_(ClPkg, length);
+SYMBOL_EXPORT_SC_(ClPkg, condition);
+SYMBOL_EXPORT_SC_(ClPkg, defvar);
+SYMBOL_EXPORT_SC_(ClPkg, defconstant);
+SYMBOL_EXPORT_SC_(ClPkg, defparameter);
+SYMBOL_EXPORT_SC_(ClPkg, intersection);
+SYMBOL_EXPORT_SC_(ClPkg, union);
+SYMBOL_EXPORT_SC_(ClPkg, remove);
+SYMBOL_EXPORT_SC_(ClPkg, pprint_dispatch);
+SYMBOL_EXPORT_SC_(ClPkg, fileStream);
 
 #pragma GCC visibility push(default)
 
 #define ClPkg_SYMBOLS
-#define DO_SYMBOL(cname,idx,pkgName,lispName,export) core::Symbol_sp cname = UNDEFINED_SYMBOL;
-#include "symbols_scraped_inc.h"
+#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
+#include SYMBOLS_SCRAPED_INC_H
 #undef DO_SYMBOL
 #undef ClPkg_SYMBOLS
 
@@ -59,12 +58,9 @@ namespace cl
 
 //    SYMBOL_EXPORT_SC_(ClPkg,defaultPathnameDefaults);
 
-    core::Package_sp initialize_commonLispPackage()
-    {
-	list<string> lnicknames = {"CL"};
-	list<string> luse;
-	return _lisp->makePackage("COMMON-LISP",lnicknames,luse);
-    }
-
-
+core::Package_sp initialize_commonLispPackage() {
+  list<string> lnicknames = {"CL"};
+  list<string> luse;
+  return _lisp->makePackage("COMMON-LISP", lnicknames, luse);
+}
 };

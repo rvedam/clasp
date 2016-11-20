@@ -84,10 +84,22 @@ by (documentation 'SYMBOL 'setf)."
 	      documentation (cadr rest))
 	(let* ((store (second rest))
 	       (args (first rest))
-	       (body (cddr rest)))
-	  (setq documentation (find-documentation body)
-		function `#'(ext::lambda-block ,access-fn (,@store ,@args) ,@body))
-	  (check-stores-number 'DEFSETF store 1)))
+	       (lambda-body (cddr rest)))
+	  (multiple-value-bind (decls body doc)
+	      (process-declarations lambda-body t)
+	    #+ecl(when decls (setq decls (list (cons 'declare decls))))
+	    (setq documentation doc)
+	    (when doc (setq doc (list doc)))
+	    (setq function `(function 
+			     #+ecl(ext::lambda-block ,access-fn (,@store ,@args) 
+						     ,@decls ,@doc ,@body)
+			     #+clasp(lambda (,@store ,@args) 
+			      (declare (core:lambda-name ,access-fn)
+				       ,@decls)
+			      ,@doc (block ,access-fn ,@body))
+			     )
+		  )
+	    (check-stores-number 'DEFSETF store 1))))
     `(eval-when (compile load eval)
        ,(ext:register-with-pde whole `(do-defsetf ',access-fn ,function))
        ,@(si::expand-set-documentation access-fn 'setf documentation)
@@ -97,7 +109,7 @@ by (documentation 'SYMBOL 'setf)."
 
 
 ;;; DEFINE-SETF-METHOD macro.
-(defmacro define-setf-expander (access-fn args &rest body)
+(defmacro define-setf-expander (access-fn args &rest lambda-body)
   "Syntax: (define-setf-expander symbol defmacro-lambda-list {decl | doc}*
           {form}*)
 Defines the SETF-method for generalized-variables (SYMBOL ...).
@@ -125,12 +137,25 @@ by (DOCUMENTATION 'SYMBOL 'SETF)."
 	(progn
 	  (setq env (gensym "env-define-setf-expander"))
 	  (setq args (cons env args))
-	  (push `(declare (ignore ,env)) body))))
-  `(eval-when (compile load eval)
-     (do-define-setf-method ',access-fn #'(ext::lambda-block ,access-fn ,args ,@body))
-     ,@(si::expand-set-documentation access-fn 'setf
-				     (find-documentation body))
-     ',access-fn))
+	  (push `(declare (ignore ,env)) lambda-body)))
+    (multiple-value-bind (decls body doc)
+	(si::process-declarations lambda-body t)
+      #+ecl(when decls (setq decls (list (cons 'declare decls))))
+      (let ((listdoc (when doc (list doc))))
+	`(eval-when (compile load eval)
+	   (do-define-setf-method ',access-fn 
+	     (function 
+	      #+ecl(ext::lambda-block ,access-fn ,args ,@listdoc ,@decls ,@body)
+	      #+clasp(lambda ,args ,@listdoc
+			     (declare (core:lambda-name ,access-fn)
+				      ,@decls)
+			     (block ,access-fn ,@body))
+	      ))
+	   ,@(si::expand-set-documentation access-fn 'setf 
+					   #+ecl(find-documentation body)
+					   #+clasp doc
+					   )
+	   ',access-fn)))))
 
 
 ;;;; get-setf-expansion.
@@ -450,6 +475,7 @@ the corresponding PLACE.  Returns NIL."
 
 
 ;;; SHIFTF macro.
+#+ecl
 (defmacro shiftf (&environment env &rest rest)
   "Syntax: (shiftf {place}+ form)
 Saves the values of PLACE and FORM, and then assigns the value of each PLACE
@@ -480,7 +506,9 @@ Returns the original value of the leftmost PLACE."
       (setq access-forms (cons access-form access-forms)))))
 
 
+
 ;;; ROTATEF macro.
+#+ecl
 (defmacro rotatef (&environment env &rest rest)
   "Syntax: (rotatef {place}*)
 Saves the values of PLACEs, and then assigns to each PLACE the saved value of
@@ -636,6 +664,9 @@ Increments the value of PLACE by the value of FORM.  FORM defaults to 1.")
   "Syntax: (decf place [form])
 Decrements the value of PLACE by the value of FORM.  FORM defaults to 1.")
 
+#+(or)(eval-when (:compile-toplevel)
+	(setq clasp-cleavir:*debug-log-on* t))
+
 (defmacro push (&environment env item place)
   "Syntax: (push form place)
 Evaluates FORM, conses the value of FORM to the value stored in PLACE, and
@@ -655,6 +686,9 @@ makes it the new value of PLACE.  Returns the new value of PLACE."
 		    (append vals (list (list 'cons item access-form))))
        (declare (:read-only ,@vars)) ; Beppe
        ,store-form)))
+
+#+(or)(eval-when (:compile-toplevel)
+	(setq clasp-cleavir:*debug-log-on* nil))
 
 (defmacro pushnew (&environment env item place &rest rest)
   "Syntax: (pushnew form place {keyword-form value-form}*)

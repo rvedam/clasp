@@ -48,28 +48,26 @@ THE SOFTWARE.
 
 #define CLBIND_BUILDING
 
-#include <core/foundation.h>
-#include <core/object.h>
-#include <clbind/cl_include.h>
+#include <clasp/core/foundation.h>
+#include <clasp/core/object.h>
+#include <clasp/clbind/cl_include.h>
 
-#include <clbind/clbind.h>
-#include <clbind/class_registry.h>
-#include <clbind/symbolTable.h>
-//#include <clbind/function.h>
-//#include <clbind/get_main_thread.h>
+#include <clasp/clbind/clbind.h>
+#include <clasp/clbind/class_registry.h>
+#include <clasp/clbind/symbolTable.h>
+//#include <clasp/clbind/function.h>
+//#include <clasp/clbind/get_main_thread.h>
 
 namespace clbind {
 
-    //! Take the place of __clbind_cast_graph
-    detail::cast_graph*         globalCastGraph;
-    //! Take the place of __clbind_class_id_map
-    detail::class_id_map*       globalClassIdMap;
-    //! Take the place of __clbind_class_map
-    detail::class_map*          globalClassMap;
+//! Take the place of __clbind_cast_graph
+detail::cast_graph *globalCastGraph;
+//! Take the place of __clbind_class_id_map
+detail::class_id_map *globalClassIdMap;
+//! Take the place of __clbind_class_map
+gctools::tagged_pointer<detail::class_map> globalClassMap;
 
-
-namespace
-{
+namespace {
 #if 0
   int make_property()
   {
@@ -143,9 +141,8 @@ namespace
 #endif
 } // namespace unnamed
 
-    CLBIND_API int get_main_thread()
-    {
-        IMPLEMENT_ME();
+CLBIND_API int get_main_thread() {
+  IMPLEMENT_ME();
 #if 0
         cl_pushlightuserdata(L, &main_thread_tag);
         cl_rawget(L, CL_REGISTRYINDEX);
@@ -157,15 +154,14 @@ namespace
 
         return result;
 #endif
-    }
+}
 
-    CLBIND_API void initialize_clbind()
-    {
-        ClassRegistry_sp registry = ClassRegistry_O::create();
-        _sym_STARtheClassRegistrySTAR->defparameter(registry);
-        globalClassIdMap = new detail::class_id_map();
-        globalCastGraph = new detail::cast_graph();
-        globalClassMap = gctools::RootClassAllocator<detail::class_map>::allocate();
-    }
+CLBIND_API void initialize_clbind() {
+  ClassRegistry_sp registry = ClassRegistry_O::create();
+  _sym_STARtheClassRegistrySTAR->defparameter(registry);
+  globalClassIdMap = new detail::class_id_map();
+  globalCastGraph = new detail::cast_graph();
+  globalClassMap = gctools::RootClassAllocator<detail::class_map>::allocate();
+}
 
 } // namespace clbind

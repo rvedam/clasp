@@ -38,6 +38,19 @@
 (defvar *debug-compiler* nil)
 (export '*debug-compiler*)
 
+;;; Turn these on to verify llvm modules and functions
+(defvar *verify-llvm-modules* nil)
+(defvar *verify-llvm-functions* nil)
+
+
+(defvar *dump-module-on-completion* nil)
+
+
+
+
+;; Generate a bitcode file for the llvm-ir prior to running optimization passes on it
+;;
+(defvar *debug-generate-prepass-llvm-ir* nil)
 
 ;; Generate C++ destructors for reference-counting otherwise don't
 ;;
@@ -87,44 +100,57 @@ Options are :tagbody :go :all :eh-landing-pads
 
 (defvar *data-layout* nil)
 (let* ((module (llvm-create-module (next-run-time-module-name)))
-       (engine-builder (llvm-sys:make-engine-builder module)))
+       (engine-builder (llvm-sys:make-engine-builder module))
+       (target-options (llvm-sys:make-target-options)))
+  (llvm-sys:setf-no-frame-pointer-elim target-options t)
+  (llvm-sys:setf-jitemit-debug-info target-options t)
+  (llvm-sys:setf-jitemit-debug-info-to-disk target-options t)
        ;; module is invalid after make-engine-builder call
-  (llvm-sys:set-target-options engine-builder '(llvm-sys:jitemit-debug-info t
-						llvm-sys:jitemit-debug-info-to-disk t))
-;;  (llvm-sys:set-use-mcjit engine-builder t)
+  (llvm-sys:set-target-options engine-builder target-options)
   (let* ((execution-engine (llvm-sys:create engine-builder)))
     (setq *data-layout* (llvm-sys:get-data-layout execution-engine))))
 
 
 
-
-#-debug-compiler
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Turn off compiler debugging code once we are confident it works
+;;;
+;;;
+#-(or)
 (progn
   (defmacro debug-print-i32 (num) nil)
   (defmacro cmp-log-dump (fn) nil)
   (defmacro cmp-log (fmt &rest args ) nil)
+  (defun is-debug-compiler-on () nil)
   )
 
 
-#+debug-compiler
 (progn
   (defun is-debug-compiler-on ()
     *debug-compiler*)
-
   (defmacro debug-print-i32 (num)
     `(if (is-debug-compiler-on)
 	 (irc-intrinsic "debugPrintI32" (jit-constant-i32 ,num))
 	 nil))
-
   (defmacro cmp-log (fmt &rest args)
     `(if (is-debug-compiler-on)
 	 (progn
 	   (bformat t "%s:%s " (source-file-name) (source-line-column))
 	   (bformat t ,fmt ,@args))
 	 nil))
-
   (defmacro cmp-log-dump (fn-or-module)
     `(if (is-debug-compiler-on)
 	 (llvm-sys:dump ,fn-or-module)
 	 nil))
   )
+
+
+;; When Cleavir is installed set the value of *cleavir-compile-hook* to use it to compile forms
+;; It expects a function of one argument (lambda (form) ...) that will generate code in the
+;; current *module* for the form.  The lambda returns T if cleavir succeeded in compiling the form
+;; and nil otherwise
+(defvar *cleavir-compile-hook* nil)
+(defvar *cleavir-compile-file-hook* nil)
+
+

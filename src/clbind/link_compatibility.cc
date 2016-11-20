@@ -48,11 +48,11 @@ THE SOFTWARE.
 
 #define CLBIND_BUILDING
 
-#include <clbind/link_compatibility.h>
+#include <clasp/clbind/link_compatibility.h>
 
-namespace clbind { namespace detail
-{
-
+namespace clbind {
+namespace detail {
+#if 0
 #ifdef CLBIND_NOT_THREADSAFE
 	void not_threadsafe_defined_conflict() {}
 #else
@@ -64,5 +64,6 @@ namespace clbind { namespace detail
 #else
 	void no_error_checking_not_defined_conflict() {}
 #endif
-
-}}
+#endif
+}
+}

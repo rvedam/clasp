@@ -24,28 +24,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define	DEBUG_LEVEL_FULL
+#define DEBUG_LEVEL_FULL
 
+#include <clasp/core/foundation.h>
+#include <clasp/core/lisp.h>
 
-#include "foundation.h"
-#include "lisp.h"
+namespace core {
 
+#define PredefinedSymbol_storage
+#include <clasp/core/predefinedSymbols_inc.h>
 
-namespace core
-{
-
-
-
-#define	PredefinedSymbol_storage
-#include "predefinedSymbols_inc.h"
-
-
-
-void initializeAllPredefinedSymbols(Lisp_sp lisp)
-{_G();
-#define	PredefinedSymbol_code
-#include "predefinedSymbols_inc.h"
+void initializeAllPredefinedSymbols(Lisp_sp lisp) {
+  _G();
+#define PredefinedSymbol_code
+#include <clasp/core/predefinedSymbols_inc.h>
 }
-
-
 };

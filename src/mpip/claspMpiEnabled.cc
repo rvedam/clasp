@@ -25,6 +25,5 @@ THE SOFTWARE.
 */
 /* -^- */
 
-
-#define	USE_MPI
-#include "claspMpi.cc"
+#define USE_MPI
+#include <clasp/mpip/claspMpi.cc>

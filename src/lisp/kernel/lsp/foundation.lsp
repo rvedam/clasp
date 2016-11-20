@@ -1,8 +1,5 @@
-
 ;;(in-package :core)
-(eval-when (eval compile load)
-  (core:select-package :core))
-
+(eval-when (eval compile load) (core:select-package :core))
 
 
 (defparameter *dump-defun-definitions* nil)
@@ -14,27 +11,14 @@
 				    &WHOLE) )
 
 
-(defun test-debug ()
-  (print "About to test debug")
-  (debug "testing debug")
-  (print "Done"))
-
 ;; Temporary check-type - everything is true
 (fset 'check-type
       #'(lambda (whole env) t)
       t)
 
 
-(fset '1- #'(lambda (num) (- num 1)))
-(fset '1+ #'(lambda (num) (+ num 1)))
-
-
-(si::fset 'defun
-	  #'(lambda (def env)
-	      (let* ((name (second def))
-		     (func `(function (ext::lambda-block ,@(cdr def)))))
-		(ext:register-with-pde def `(si::fset ',name ,func))))
-	  t)
+(fset '1- #'(lambda (num) (declare (core::lambda-name 1-)) (- num 1)))
+(fset '1+ #'(lambda (num) (declare (core::lambda-name 1+)) (+ num 1)))
 
 
 
@@ -166,10 +150,7 @@ the corresponding VAR.  Returns NIL."
 	  t)
 
 
-(*make-special '*bytecodes-compiler*)
-(setq *bytecodes-compiler* nil)
-
-
+(defvar *bytecodes-compiler* nil)
 
 
 
@@ -284,8 +265,7 @@ the corresponding VAR.  Returns NIL."
                                  (advance-hash-table-iterator)))
                              (progn
                                (setq hash (1+ hash))
-                               (advance-hash-table-iterator)))))
-                   nil)))
+                               (advance-hash-table-iterator))))))))
       (function (lambda ()
 	(if (>= hash number-of-hashes)
 	    nil
@@ -343,25 +323,6 @@ the corresponding VAR.  Returns NIL."
 
 
 
-(if (not (fboundp 'compile))
-    (defun proclaim (d)
-      "Args: (decl-spec)
-Gives a global declaration.  See DECLARE for possible DECL-SPECs."
-      (when (eq (car d) 'SPECIAL) (mapc #'sys::*make-special (cdr d))))
-)
-
-
-(in-package :ext)
-(defun compiled-function-name (x)
-  (core:function-name x))
-
-(defun compiled-function-file (x)
-  (core:function-source-pos x))
-
-
-(defun warn-or-ignore (x &rest args)
-  nil)
-(export 'warn-or-ignore)
 
 
 (in-package :cl)
@@ -369,18 +330,50 @@ Gives a global declaration.  See DECLARE for possible DECL-SPECs."
 ;; We do not use this macroexpanso, and thus we do not care whether
 ;; it is efficiently compiled by ECL or not.
 (core:fset 'multiple-value-bind
-      #'(lambda (whole env)
-	  (let ((vars (cadr whole))
-		(form (caddr whole))
-		(body (cdddr whole)))
-	  `(multiple-value-call #'(lambda (&optional ,@(mapcar #'list vars) &rest ,(gensym)) ,@body) ,form)))
-      t)
+           #'(lambda (whole env)
+               (declare (core:lambda-name multiple-value-bind-macro))
+               (let ((vars (cadr whole))
+                     (form (caddr whole))
+                     (body (cdddr whole)))
+                 `(multiple-value-call
+                      #'(lambda (&optional ,@(mapcar #'list vars) &rest ,(gensym)) ,@body)
+                    ,form)))
+           t)
 
 (defun warn (x &rest args)
-  (bformat t "WARN: %s %s\n" x args))
+  (core:bformat t "WARN: %s %s\n" x args))
 
 
 (defun class-name (x)
-  (name-of-class x))
+  (core:name-of-class x))
+
+(defun invoke-debugger (cond)
+  (core:invoke-internal-debugger cond))
+
 
 (export 'class-name)
+
+
+(in-package :ext)
+(defun compiled-function-name (x)
+  (core:function-name x))
+
+(defun compiled-function-file (x)
+  (multiple-value-bind (sfi pos)
+      (core:function-source-pos x)
+    (let* ((source-file (core:source-file-info-source-debug-namestring sfi)))
+      (if source-file
+          (let* ((source-pathname (pathname source-file))
+                 (source-directory (pathname-directory source-pathname))
+                 (pn (if (eq (car source-directory) :relative)
+                         (merge-pathnames source-pathname (translate-logical-pathname "SYS:"))
+                         source-pathname))
+                 (filepos (+ (core:source-file-info-source-debug-offset sfi) pos)))
+            (values pn filepos))
+          (values nil 0)))))
+(export '(compiled-function-name compiled-function-file))
+
+(defun warn-or-ignore (x &rest args)
+  nil)
+(export 'warn-or-ignore)
+

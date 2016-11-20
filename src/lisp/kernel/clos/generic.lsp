@@ -133,7 +133,8 @@
 					     (slot-value gfun 'name)
 					     (or name :anonymous)))
 			      )
-  (declare (ignore initargs slot-names))
+  (declare (ignore initargs slot-names)
+           (core:lambda-name 'shared-initialize-generic-function))
   ;;
   ;; Check the validity of several fields.
   ;;
@@ -183,7 +184,8 @@
 
 (defmethod shared-initialize ((gfun standard-generic-function) slot-names
 			      &rest initargs)
-  (declare (ignore initargs slot-names))
+  (declare (ignore initargs slot-names)
+           (core:lambda-name 'shared-initialize-standard-generic-function))
   (call-next-method)
   (when (generic-function-methods gfun)
     (compute-g-f-spec-list gfun))
@@ -270,7 +272,7 @@
           ((si::instancep (or gfun (setf gfun (fdefinition name))))
 	   #+compare(print "MLOG generic.lsp ensure-generic-function line 249")
 	   (let ((new-gf (apply #'ensure-generic-function-using-class gfun name args)))
-	     #+compare(print (list "MLOG generic.lsp leaving ensure-generic-function with gf: " new-gf))
+	     #+compare(print (list "MLOG generic.lsp leaving ensure-generic-function with gf "))
 	     new-gf))
 	  ((special-operator-p name)
 	   (simple-program-error "The special operator ~A is not a valid name for a generic function" name))

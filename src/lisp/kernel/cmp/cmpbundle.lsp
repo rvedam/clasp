@@ -50,13 +50,14 @@
   )
 ||#
 
-(defvar *echo-system* t)
-(defun safe-system (cmd)
+(defvar *echo-system* nil)
+(defun safe-system (cmd-list)
   (if *echo-system*
-      (bformat t "%s\n" cmd))
-  (let ((ret (system cmd)))
-    (unless (eql ret 0)
-      (error "Could not execute command with system: ~s" cmd))))
+      (bformat t "%s\n" cmd-list))
+  (multiple-value-bind (retval error-message)
+      (ext:vfork-execvp cmd-list)
+    (when retval
+      (error "Could not execute command with ext:vfork-execvp with ~s~%  return-value: ~d  error-message: ~s~%" cmd-list retval error-message))))
 
 
 
@@ -65,17 +66,20 @@
   (let* ((bitcode-physical-pathname (translate-logical-pathname bitcode-pathname))
          (file (namestring bitcode-physical-pathname))
          (output-file (namestring (make-pathname :type "o" :defaults bitcode-physical-pathname))))
-    #+(and :target-os-linux :address-model-64)
-    (return-from generate-compile-command (values (bformat nil "llc -filetype=obj -relocation-model=pic -o %s %s" output-file file) output-file))
-    #+(and target-os-darwin use-clang)
-    (let* ((clasp-clang-path (core:getenv "CLASP_CLANG_PATH"))
-           (clang-executable (if clasp-clang-path
-                                 clasp-clang-path
-                                 "clang")))
-      (return-from generate-compile-command (values (bformat nil "%s -c -o %s %s" clang-executable output-file file) output-file)))
-    #+(and target-os-darwin (not use-clang))
-    (return-from generate-compile-command (values (bformat nil "llc -filetype=obj -relocation-model=pic -o %s %s" output-file file) output-file))
-    (error "Add support for running external clang to cmpbundle.lsp>generate-compile-command on this system")))
+    (cond
+      ((and (member :target-os-linux *features*)
+            (member :address-model-64 *features*))
+       (return-from generate-compile-command (values (bformat nil "llc -filetype=obj -relocation-model=pic -o %s %s" output-file file) output-file)))
+      ((and (member :target-os-darwin *features*)
+            (member :address-model-64 *features*))
+       (if (member :use-clang *features*)
+           (let* ((clasp-clang-path (ext:getenv "CLASP_CLANG_PATH"))
+                  (clang-executable (if clasp-clang-path
+                                        clasp-clang-path
+                                        "clang")))
+             (return-from generate-compile-command (values (bformat nil "%s -c -o %s %s" clang-executable output-file file) output-file)))
+           (return-from generate-compile-command (values (bformat nil "llc -filetype=obj -relocation-model=pic -o %s %s" output-file file) output-file))))
+      (t (error "Add support for running external clang to cmpbundle.lsp>generate-compile-command on this system")))))
 
 
 
@@ -83,40 +87,57 @@
 ;;; This function will compile a bitcode file in PART-BITCODE-PATHNAME with clang and put the output in the
 ;;; same directory as PART-BITCODE-PATHNAME
 (defun generate-object-file (part-bitcode-pathname &key test)
-  (multiple-value-bind (compile-command object-filename)
-      (generate-compile-command part-bitcode-pathname)
+  (let ((output-pathname (compile-file-pathname part-bitcode-pathname :output-type :object))
+        (reloc-model (cond
+                      ((member :target-os-linux *features*) 'llvm-sys:reloc-model-pic-)
+                      (t 'llvm-sys:reloc-model-default))))
+    (bitcode-to-obj-file part-bitcode-pathname output-pathname :reloc-model reloc-model)
+    (truename output-pathname)))
+
+
+(defun ensure-string (name)
+  (cond
+    ((pathnamep name) (core:coerce-to-filename name))
+    ((stringp name) name)
+    (t (string name))))
+
+(defun generate-link-command (in-all-names in-bundle-file)
+  ;; options are a list of strings like (list "-v")
+  (let ((options nil)
+        (all-names (mapcar (lambda (n) (ensure-string n)) (if (listp in-all-names) in-all-names (list in-all-names))))
+        (bundle-file (ensure-string in-bundle-file)))
+    (cond
+      ((member :target-os-darwin *features*)
+       (return-from generate-link-command
+         `("ld" ,@options 
+                ,@all-names
+                "-macosx_version_min" "10.7"
+                "-flat_namespace" 
+                "-undefined" "warning"
+                "-bundle"
+                "-o"
+                ,bundle-file)))
+      ((member :target-os-linux *features*)
+       (let* ((clasp-clang-path (ext:getenv "CLASP_CLANG_PATH"))
+              (clang-executable (if clasp-clang-path
+                                    clasp-clang-path
+                                    "clang")))
+         (return-from generate-link-command
+           `(,clang-executable
+             ,@options
+             ,@all-names
+             "-shared"
+             "-o"
+             ,bundle-file))))
+      (t (error "Add support for this operating system to cmp:execute-link")))))
+
+(defun execute-link (bundle-pathname all-names &key test)
+  "Link object files together to create a shared library/bundle"
+  (let ((link-command (generate-link-command all-names bundle-pathname)))
     (if test
-        (bformat t "About to evaluate: %s\n" compile-command)
-        (safe-system compile-command))
-    object-filename))
-
-
-
-(defun generate-link-command (all-names bundle-file)
-  #+target-os-darwin
-  (return-from generate-link-command
-    (bformat nil "ld -v %s -macosx_version_min 10.7 -flat_namespace -undefined warning -bundle -o %s" all-names bundle-file))
-  #+target-os-linux
-  (let* ((clasp-clang-path (core:getenv "CLASP_CLANG_PATH"))
-         (clang-executable (if clasp-clang-path
-                               clasp-clang-path
-                               "clang")))
-    (return-from generate-link-command (bformat nil "%s -v %s -shared -o %s" clang-executable all-names bundle-file)))
-  (error "Add support for this operating system to cmp:execute-link")
-  )
-
-
-(defun execute-link (bundle-pathname all-part-pathnames &key test)
-  (let* ((part-files (mapcar #'(lambda (pn) (namestring (translate-logical-pathname (make-pathname :type "o" :defaults pn))))
-                             all-part-pathnames))
-         (bundle-file (core:coerce-to-filename bundle-pathname))
-         (all-names (make-array 256 :element-type 'character :adjustable t :fill-pointer 0)))
-    (dolist (f part-files) (push-string all-names (bformat nil "%s " f)))
-    (let ((link-command (generate-link-command all-names bundle-file)))
-      (if test
-          (bformat t "About to execute: %s\n" link-command)
-          (safe-system link-command))))
-)
+        (bformat t "About to execute: %s\n" link-command)
+        (safe-system link-command)))
+    (truename bundle-pathname))
 
 
 
@@ -128,7 +149,7 @@
 ;;;
 (defun make-bundle (parts-pathnames &optional (bundle-name +image-pathname+)
 		    &aux (bundle-type (if (eq bundle-name '_image) 'kernel 'user)))
-  "Use (link-system _last-file_) to create the files for a bundle - then go to src/lisp/brcl and make-bundle.sh _image"
+  "Use (link-system _last-file_) to create the files for a bundle - then go to src/lisp/clasp and make-bundle.sh _image"
   (let* ((wrapper-pathname (make-bundle-wrapper parts bundle-name))
 	 (wrapper-and-parts-pathnames (cons wrapper-pathname parts-pathnames))
 	 (bundle-pathname (make-pathname :name (string-downcase (string bundle-name)) :defaults *image-directory*)))
@@ -152,7 +173,7 @@
 
 #||
 (defun link-system (pathname-destination &key lisp-bitcode-files (target-backend (default-target-backend)) test) ;; &optional (bundle-pathname +image-pathname+))
-  "Use (link-system _last-file_) to create the files for a bundle - then go to src/lisp/brcl and make-bundle.sh _image"
+  "Use (link-system _last-file_) to create the files for a bundle - then go to src/lisp/clasp and make-bundle.sh _image"
   (let* ((core:*target-backend* target-backend)
          (pathname-destination (target-backend-pathname pathname-destination :target-backend target-backend))
          (wrapper-fasl-pathname (make-bundle-wrapper lisp-bitcode-files pathname-destination))
@@ -163,22 +184,6 @@
 (export '(make-bundle link-system))
 ||#
 
-
-
-
-(defun create-module-pass-manager-for-lto (&key output-pathname debug-ir)
-  (let* ((pass-manager-builder (llvm-sys:make-pass-manager-builder))
-         (pass-manager (llvm-sys:make-pass-manager)))
-;;    (llvm-sys:populate-module-pass-manager pass-manager-builder pass-manager)
-    (llvm-sys:populate-ltopass-manager pass-manager-builder pass-manager nil)
-;;    (llvm-sys:add-global-boot-functions-size-pass pass-manager)   ;; I do this outside of a module pass
-#|    (when debug-ir
-      (let ((
-        (llvm-sys:pass-manager-add pass-manager (llvm-sys:create-debug-irpass nil nil )))
-|#
-    pass-manager))
-
-
 (defun link-bitcode-modules (part-pathnames &key additional-bitcode-pathnames
                                               (output-pathname +image-pathname+)
                                               prologue-module
@@ -186,60 +191,57 @@
                                               debug-ir
                              &aux conditions)
   "Link a bunch of modules together, return the linked module"
-  (format t "part-pathnames ~a~%" part-pathnames)
   (with-compiler-env (conditions)
     (multiple-value-bind (module function-pass-manager)
-        (cmp:create-llvm-module-for-compile-file (pathname-name output-pathname))
-      (with-module (:module module
-                            :function-pass-manager function-pass-manager)
-        (let* ((*compile-file-pathname* output-pathname)
-               (*compile-file-truename* (translate-logical-pathname *compile-file-pathname*))
-               (*gv-source-path-name* (jit-make-global-string-ptr (namestring output-pathname) "source-pathname"))
-               (*gv-source-file-info-handle* (llvm-sys:make-global-variable *the-module*
-                                                                            +i32+ ; type
-                                                                            nil ; constant
-                                                                            'llvm-sys:internal-linkage
-                                                                            (jit-constant-i32 -1)
-                                                                            "source-file-info-handle"))
-               (bcnum 0))
-          (let ((linker (llvm-sys:make-linker *the-module*)))
-            ;; Don't enforce .bc extension for additional-bitcode-pathnames
-            (if prologue-module
-                (progn
-                  (bformat t "Linking prologue-form\n")
-                  (remove-main-function-if-exists prologue-module)
-                  (llvm-sys:link-in-module linker prologue-module)))
-            (dolist (part-pn additional-bitcode-pathnames)
-              (let* ((bc-file part-pn))
-                (format t "Linking ~a~%" bc-file)
-                (let* ((part-module (llvm-sys:parse-bitcode-file (namestring (truename bc-file)) *llvm-context*)))
-                  (remove-main-function-if-exists part-module) ;; Remove the ClaspMain FN if it exists
-                  (multiple-value-bind (failure error-msg)
-                      (llvm-sys:link-in-module linker part-module)
-                    (when failure
-                      (error "While linking additional module: ~a  encountered error: ~a" bc-file error-msg))
-                    ))))
-            (dolist (part-pn part-pathnames)
-              (let* ((bc-file (make-pathname :type "bc" :defaults part-pn)))
-                (format t "Linking ~a~%" bc-file)
-                (let* ((part-module (llvm-sys:parse-bitcode-file (namestring (truename bc-file)) *llvm-context*)))
-                  (remove-main-function-if-exists part-module) ;; Remove the ClaspMain FN if it exists
-                  (multiple-value-bind (failure error-msg)
-                      (llvm-sys:link-in-module linker part-module)
-                    (when failure
-                      (error "While linking part module: ~a  encountered error: ~a" part-pn error-msg))))))
-            (if epilogue-module
-                (progn
-                  (bformat t "Linking epilogue-form\n")
-                  (remove-main-function-if-exists epilogue-module)
-                  (llvm-sys:link-in-module linker epilogue-module)))
-            (reset-global-boot-functions-name-size *the-module*)
-            (add-main-function *the-module*) ;; Here add the main function
-            (llvm-sys:write-bitcode-to-file *the-module* (core:coerce-to-filename (pathname "image_test_prepass.bc")))
-            (let* ((mpm (create-module-pass-manager-for-lto :output-pathname output-pathname :debug-ir debug-ir)))
-              (format t "Running link time optimization module pass manager~%")
-              (llvm-sys:pass-manager-run mpm *the-module*))
-            *the-module*))))))
+        (create-llvm-module-for-compile-file (pathname-name output-pathname))
+      (let* ((*compile-file-pathname* (pathname (merge-pathnames output-pathname)))
+	     (*compile-file-truename* (translate-logical-pathname *compile-file-pathname*))
+	     (bcnum 0))
+	(with-module ( :module module
+                               :optimize t
+                               :source-namestring (namestring output-pathname))
+          (with-debug-info-generator (:module module :pathname output-pathname)
+            (let* ((linker (llvm-sys:make-linker *the-module*)))
+              ;; Don't enforce .bc extension for additional-bitcode-pathnames
+              (if prologue-module
+                  (progn
+                    (bformat t "Linking prologue-form\n")
+                    (remove-main-function-if-exists prologue-module)
+                    (llvm-sys:link-in-module linker prologue-module)))
+              ;; This is where I used to link the additional-bitcode-pathnames
+              (dolist (part-pn part-pathnames)
+                (let* ((bc-file (make-pathname :type "bc" :defaults part-pn)))
+                  (bformat t "Linking %s\n" bc-file)
+                  (let* ((part-module (llvm-sys:parse-bitcode-file (namestring (truename bc-file)) *llvm-context*)))
+                    (remove-main-function-if-exists part-module) ;; Remove the ClaspMain FN if it exists
+                    (multiple-value-bind (failure error-msg)
+                        (llvm-sys:link-in-module linker part-module)
+                      (when failure
+                        (error "While linking part module: ~a  encountered error: ~a" part-pn error-msg))))))
+              (if epilogue-module
+                  (progn
+                    (bformat t "Linking epilogue-form\n")
+                    (remove-main-function-if-exists epilogue-module)
+                    (llvm-sys:link-in-module linker epilogue-module)))
+              (reset-global-boot-functions-name-size *the-module*)
+              (add-main-function *the-module*) ;; Here add the main function
+              ;; The following links in additional-bitcode-pathnames
+              (dolist (part-pn additional-bitcode-pathnames)
+                (let* ((bc-file part-pn))
+                  (bformat t "Linking %s\n" bc-file)
+                  (let* ((part-module (llvm-sys:parse-bitcode-file (namestring (truename bc-file)) *llvm-context*)))
+                    (remove-main-function-if-exists part-module) ;; Remove the ClaspMain FN if it exists
+                    (multiple-value-bind (failure error-msg)
+                        (llvm-sys:link-in-module linker part-module)
+                      (when failure
+                        (error "While linking additional module: ~a  encountered error: ~a" bc-file error-msg))
+                      ))))
+              (when *debug-generate-prepass-llvm-ir*
+                (llvm-sys:write-bitcode-to-file *the-module* (core:coerce-to-filename (pathname "image_test_prepass.bc"))))
+              #+(or)(let* ((mpm (create-module-pass-manager-for-lto :output-pathname output-pathname :debug-ir debug-ir)))
+                      (format t "Running link time optimization module pass manager~%")
+                      (llvm-sys:pass-manager-run mpm *the-module*))
+              *the-module*)))))))
 
 #||
 (load-system :start :cmp :interp t)
@@ -249,7 +251,7 @@
 ||#
 
 (defun link-system-lto (output-pathname
-                        &key (intrinsics-bitcode-path +intrinsics-bitcode-pathname+)
+                        &key (intrinsics-bitcode-path (core:build-intrinsics-bitcode-pathname))
                           lisp-bitcode-files
                           prologue-form
                           epilogue-form
@@ -259,22 +261,22 @@
          (output-pathname (pathname output-pathname))
          (part-pathnames lisp-bitcode-files)
          ;;         (bundle-filename (string-downcase (pathname-name output-pathname)))
-	 (bundle-bitcode-pathname (make-pathname :type "bc" :defaults output-pathname))
-         (prologue-module (if prologue-form (compile-form-into-module prologue-form "prologueForm")))
-         (epilogue-module (if epilogue-form (compile-form-into-module epilogue-form "epilogueForm")))
-         (module (link-bitcode-modules part-pathnames
-                                       :additional-bitcode-pathnames (if intrinsics-bitcode-path
-                                                                         (list intrinsics-bitcode-path)
-                                                                         nil)
-                                       :output-pathname output-pathname
-                                       :prologue-module prologue-module
-                                       :epilogue-module epilogue-module
-                                       :debug-ir debug-ir)))
-    (ensure-directories-exist bundle-bitcode-pathname)
-    (llvm-sys:write-bitcode-to-file module (core:coerce-to-filename bundle-bitcode-pathname))
-    (generate-object-file bundle-bitcode-pathname)
-    (execute-link output-pathname (list bundle-bitcode-pathname))
-    (truename output-pathname)))
+	 (bundle-bitcode-pathname (cfp-output-file-default output-pathname :linked-bitcode)))
+    (let* ((prologue-module (if prologue-form (compile-form-into-module prologue-form "prologueForm")))
+           (epilogue-module (if epilogue-form (compile-form-into-module epilogue-form "epilogueForm")))
+           (module (link-bitcode-modules part-pathnames
+                                         :additional-bitcode-pathnames (if intrinsics-bitcode-path
+                                                                           (list intrinsics-bitcode-path)
+                                                                           nil)
+                                         :output-pathname output-pathname
+                                         :prologue-module prologue-module
+                                         :epilogue-module epilogue-module
+                                         :debug-ir debug-ir)))
+      (ensure-directories-exist bundle-bitcode-pathname)
+      (llvm-sys:write-bitcode-to-file module (core:coerce-to-filename bundle-bitcode-pathname))
+      (let ((object-pathname (truename (generate-object-file bundle-bitcode-pathname))))
+        (execute-link output-pathname (list object-pathname)))
+      output-pathname)))
 
 (export '(link-system-lto))
 
@@ -287,6 +289,9 @@
 
 
 (defun build-fasl (out-file &key lisp-files)
-  "Return the truename of the output file"
-  (link-system-lto out-file :lisp-bitcode-files lisp-files))
+  "Link the object files in lisp-files into a shared library in out-file.
+Return the truename of the output file"
+;;  (bformat t "cmpbundle.lsp:build-fasl  building fasl for %s from files: %s\n" out-file lisp-files)
+  (execute-link out-file lisp-files))
+
 (export 'build-fasl)

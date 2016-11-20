@@ -40,7 +40,7 @@
     ;; regular classes then it will get an Instance allocator
     ;; If one of them is a ClbindClass then this will inherit a
     ;; duplicate of its allocator
-    #+brcl(sys:inherit-default-allocator class direct-superclasses)
+    #+clasp(sys:inherit-default-allocator class direct-superclasses)
     (when name
       (si:create-type-name name)
       (setf (find-class name) class))))
@@ -84,7 +84,7 @@
   (declare (ignore initargs))
   (error "The structure-class (~A) cannot be instantiated" class))
 
-#+brcl(export 'make-instance)
+#+clasp(export 'make-instance)
 
 (defmethod finalize-inheritance ((class structure-class))
   (call-next-method)
@@ -118,8 +118,13 @@
 	(write-string " ..." stream)
 	(return))
       (setq sv (si:instance-ref obj i))
-      (write-string " :" stream)
-      (prin1 (slot-definition-name (car scan)) stream)
+      #+ecl(write-string " :" stream)
+      #+ecl(prin1 (slot-definition-name (car scan)) stream)
+      ;; fix bug where symbols like :FOO::BAR are printed
+      #+clasp(write-string " " stream)
+      #+clasp(let ((kw (intern (symbol-name (slot-definition-name (car scan)))
+                               (load-time-value (find-package "KEYWORD")))))
+               (prin1 kw stream))
       (write-string " " stream)
       (prin1 sv stream))
     (write-string ")" stream)

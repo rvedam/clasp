@@ -31,14 +31,25 @@
 
 (in-package :cmp)
 
-  
-(setq *implicit-compile-hook*
-      (compile nil '(lambda (form &optional environment)
-;;                     (bformat t "implicitly compiling: %s\n" form)
-                     (multiple-value-bind (compiled-function warn fail)
-                         (compile-in-env nil `(lambda () ,form) environment)
-;;                         (compile-in-env nil form environment)
-                       (values compiled-function warn fail)))))
 
-;; From now on every S-exp is compiled before evaluation
-(setq *implicit-compilation* t)
+;;;
+;;; Don't install the bootstrapping compiler as the implicit compiler when compiling cleavir
+;;;
+
+(defparameter *print-implicit-compile-form* nil)
+
+(defun bclasp-implicit-compile-form (form &optional environment)
+  (declare (core:lambda-name cmp-repl-implicit-compile))
+  (when *print-implicit-compile-form* 
+    (bformat t "Compiling form: %s\n" form))
+  (with-compilation-unit (:override t)
+    (multiple-value-bind (compiled-function warn fail)
+        (compile-in-env 'repl `(lambda () 
+                               (declare (core:lambda-name implicit-repl))
+                               ,form) environment nil)
+      (funcall compiled-function))))
+;;    (values compiled-function warn fail)))
+
+#-cleavir  
+(setq *implicit-compile-hook* #'bclasp-implicit-compile-form)
+
