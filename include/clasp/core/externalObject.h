@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: externalObject.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,135 +25,99 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef ExternalObject_H
-#define ExternalObject_H
 
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
-#include <clasp/core/standardObject.h>
-
-#if 0
-namespace core
-{
-    SMART(ExternalObjectManager);
-    c l a s s ExternalObjectManager_O : public T_O
-    {
-	L I S P _BASE1(T_O);
-	L I S P _CLASS(core,CorePkg,ExternalObjectManager_O,"ExternalObjectManager");
-	void	initialize();
-    private:
-	map<void*,ExternalObject_sp>	_ExternalPointersToObjects;
-    public:
-	void registerExternal(void* ptr, ExternalObject_sp obj, Lisp_sp lisp);
-	bool recognizesExternal(void* ptr);
-	ExternalObject_sp objectForExternal(void* ptr);
-
-	DEFAULT_CTOR_DTOR(ExternalObjectManager_O);
-    };
-TRANSLATE(core::ExternalObjectManager_O);
-
-};
-#endif
 
 namespace core {
 
-// set this class up by hand
-SMART(ExternalObject);
-class ExternalObject_O : public T_O // StandardObject_O
-                         {
-  LISP_BASE1(T_O); // LISP_BASE1(StandardObject_O);
-  LISP_CLASS(core, CorePkg, ExternalObject_O, "ExternalObject");
-GCPRIVATE:
-  Class_sp _Class;
-
-public:
-  virtual bool eql_(T_sp obj) const;
-  virtual bool isUndefined() const { return this->externalObject() == NULL; };
-  virtual void *externalObject() const {
-    _OF();
-    SUBCLASS_MUST_IMPLEMENT();
-  };
-  virtual void set_externalObject(void *ptr) {
-    _OF();
-    SUBCLASS_MUST_IMPLEMENT();
-  };
-
-public:
-  explicit ExternalObject_O() : Base(), _Class(_Nil<Class_O>()){};
-  virtual ~ExternalObject_O(){};
-};
-
-template <class OT, class WT>
-gctools::smart_ptr<OT> RP_Create_wrapped(WT ptr) {
-  _G();
-  GC_ALLOCATE(OT, wrapper);
-  wrapper->set_wrapped(ptr);
-  return wrapper;
-}
-
-// public:
-
-#define LISP_EXTERNAL_CLASS(oNamespace, oPackage, wrappedClass, o_nameOfWrappedClass, nameOfWrappedClass, o_nameOfWrappedClassBase)      \
-  /* */ LISP_BASE1(o_nameOfWrappedClassBase);                                                                                            \
-  /* */ __COMMON_CLASS_PARTS(oNamespace, oPackage, o_nameOfWrappedClass, nameOfWrappedClass) public : typedef wrappedClass WrappedClass; \
-                                                                                                                                         \
-public:                                                                                                                                  \
-  /*Derived from StandardObject so it supports slots*/                                                                                   \
-  static bool static_supportsSlots() { return true; };                                                                                   \
-  /* end */
-};
-
-TRANSLATE(core::ExternalObject_O);
-
-namespace core {
-
-typedef enum { DeleteOnDtor = 1,
-               Copyable = 2,
+typedef enum {
+  None = 0,
+  DeleteOnDtor = 1,
+  Copyable = 2,
 } ForeignDataFlagEnum;
 
 // set this class up by hand
-SMART(ForeignData);
-/* Maintain a pointer to a block of Foreign data that we may or may not own depending on _OwnershipFlags */
-
-class ForeignData_O : public ExternalObject_O // StandardObject_O
-                      {
-  LISP_BASE1(ExternalObject_O); // LISP_BASE1(StandardObject_O);
-  LISP_CLASS(core, CorePkg, ForeignData_O, "ForeignData");
-#if defined(XML_ARCHIVE)
-  void archiveBase(ArchiveP node);
-#endif // defined(XML_ARCHIVE)
-       //	string	__repr__() const;
-  T_sp _Kind;
-  int _OwnershipFlags;
-  size_t _Size;
-  void *_Data;
-
-public:
-  static ForeignData_sp allocateForeignObject(T_sp kind);
-
-public:
-  template <class T>
-  T data() { return reinterpret_cast<T>(this->_Data); };
+SMART(ExternalObject);
+class ExternalObject_O : public General_O {
+  LISP_CLASS(core, CorePkg, ExternalObject_O, "ExternalObject", General_O);
 
 private:
-  void allocate(T_sp kind, int ownershipFlags, size_t size);
-
-  void freeForeignObject();
+  Instance_sp _Class;
 
 public:
-  explicit ForeignData_O();
-  virtual ~ForeignData_O(); // non-trivial
-};
+  virtual bool eql_(T_sp obj) const;
+  CL_DEFMETHOD virtual bool isUndefined() const { return this->externalObject() == NULL; };
+  virtual void* externalObject() const { SUBCLASS_MUST_IMPLEMENT(); };
+  virtual void set_externalObject(void* ptr) { SUBCLASS_MUST_IMPLEMENT(); };
+
+public:
+  explicit ExternalObject_O() : Base(), _Class(nil<Instance_O>()){};
+  virtual ~ExternalObject_O(){};
 };
 
-TRANSLATE(core::ForeignData_O);
+template <class Type, class WrapperType> gctools::smart_ptr<Type> RP_Create_wrapped(WrapperType ptr) {
+  auto wrapper = gctools::GC<Type>::allocate_with_default_constructor();
+  wrapper->set_wrapped(ptr);
+  return wrapper;
+};
 
-template <>
-struct gctools::GCInfo<core::ForeignData_O> {
+}; // namespace core
+
+// public:
+
+#ifndef SCRAPING
+
+#define LISP_EXTERNAL_CLASS(oNamespace, oPackage, wrappedClass, aClass, nameOfWrappedClass, aClassBase)                            \
+public:                                                                                                                            \
+  typedef aClassBase Base;                                                                                                         \
+  typedef LispBases1<Base> Bases;                                                                                                  \
+  COMMON_CLASS_PARTS(oNamespace, oPackage, aClass, nameOfWrappedClass)                                                             \
+  static gctools::smart_ptr<aClass> create() { return gctools::GC<aClass>::allocate_with_default_constructor(); };                 \
+  virtual core::Instance_sp __class() const { return core::lisp_getStaticClass(aClass::static_ValueStampWtagMtag); }               \
+  typedef wrappedClass WrappedClass;                                                                                               \
+                                                                                                                                   \
+public:                                                                                                                            \
+  /*Derived from StandardObject so it supports slots*/                                                                             \
+  static bool static_supportsSlots() { return true; };
+
+#endif // SCRAPING
+
+namespace core {
+class ImmobileObject_O;
+};
+
+template <> struct gctools::GCInfo<core::ImmobileObject_O> {
   static bool constexpr NeedsInitialization = false;
-  static bool constexpr NeedsFinalization = true;
-  static bool constexpr Moveable = true;
-  static bool constexpr Atomic = false;
+  static bool constexpr NeedsFinalization = false;
+  static GCInfo_policy constexpr Policy = collectable_immobile;
 };
 
+namespace core {
+SMART(ImmobileObject);
+class ImmobileObject_O : public General_O {
+#if 0
+    CL_DOCSTRING(R"dx(Immobile-object is allocated in the collectable_immobile pool and guaranteed not to move.
+They can be passed to C++ functions and and then passed back to clasp code and used to locate a moveable object by one level of indirection.)dx")
 #endif
+  LISP_CLASS(core, CorePkg, ImmobileObject_O, "ImmobileObject", General_O);
+
+public:
+  T_sp _Head;
+  T_sp _Tail;
+
+public:
+  CL_LAMBDA(head &optional tail);
+  CL_DEF_CLASS_METHOD static ImmobileObject_sp make_immobile_object(core::T_sp head, core::T_sp tail = nil<core::T_O>()) {
+    auto p = gctools::GC<ImmobileObject_O>::allocate(head, tail);
+    return p;
+  };
+
+public:
+  CL_DEFMETHOD T_sp getHead() const { return this->_Head; };
+  CL_DEFMETHOD T_sp getTail() const { return this->_Tail; };
+  CL_DEFMETHOD void setHead(T_sp head) { this->_Head = head; };
+  CL_DEFMETHOD void setTail(T_sp tail) { this->_Tail = tail; };
+  explicit ImmobileObject_O(T_sp head, T_sp tail) : _Head(head), _Tail(tail){};
+  virtual ~ImmobileObject_O(){};
+};
+}; // namespace core

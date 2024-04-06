@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: open.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -46,9 +48,6 @@ THE SOFTWARE.
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 // OR OTHER DEALINGS IN THE SOFTWARE.
 
-#ifndef CLBIND_OPEN_HPP_INCLUDED
-#define CLBIND_OPEN_HPP_INCLUDED
-
 #include <clasp/clbind/config.h>
 
 namespace clbind {
@@ -56,17 +55,13 @@ namespace clbind {
 namespace detail {
 class cast_graph;
 class class_id_map;
-class class_map;
-};
+}; // namespace detail
 
 //! Take the place of __clbind_cast_graph
-extern detail::cast_graph *globalCastGraph;
+extern detail::cast_graph* globalCastGraph;
 //! Take the place of __clbind_class_id_map
-extern detail::class_id_map *globalClassIdMap;
-//! Take the place of __clbind_class_map
-extern gctools::tagged_pointer<detail::class_map> globalClassMap;
+extern detail::class_id_map* globalClassIdMap;
 
+void initializeCastGraph();
 CLBIND_API void initialize_clbind();
-}
-
-#endif // CLBIND_OPEN_HPP_INCLUDED
+} // namespace clbind

@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: gcSmallMap.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,15 +26,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef gc_gcSmallMap_H
-#define gc_gcSmallMap_H
+
+namespace core {
+bool cl__equal(T_sp x, T_sp y);
+};
 
 namespace gctools {
 
 struct SmallMapGetError : public std::exception {};
 
-template <class Key, class Value, typename Allocator>
-class GCSmallMap : public GCVector<pair<Key, Value>, Allocator> {
+template <class Key, class Value, typename Allocator> class GCSmallMap : public GCVector<pair<Key, Value>, Allocator> {
 public:
   typedef Key key_type;
   typedef Value mapped_type;
@@ -42,6 +45,7 @@ public:
   typedef typename Base::const_iterator const_iterator;
 
 public:
+  void clear() { this->Base::clear(); };
   const_iterator find(Key k) const {
     const_iterator it;
     for (it = this->begin(); it != this->end(); ++it) {
@@ -62,15 +66,21 @@ public:
     return it;
   }
 
-  bool contains(Key k) const {
-    return this->find(k) != this->end();
+  iterator findEqual(Key k) {
+    iterator it;
+    for (it = this->begin(); it != this->end(); ++it) {
+      if (core::cl__equal(it->first, k)) {
+        return it;
+      }
+    }
+    return it;
   }
 
-  int count(Key k) const {
-    return (this->find(k) != this->end()) ? 1 : 0;
-  }
+  bool contains(Key k) const { return this->find(k) != this->end(); }
 
-  pair<iterator, bool> insert(const value_type &val) {
+  int count(Key k) const { return (this->find(k) != this->end()) ? 1 : 0; }
+
+  pair<iterator, bool> insert(const value_type& val) {
     iterator it = this->find(val.first);
     if (it == this->end()) {
       this->push_back(val);
@@ -82,7 +92,19 @@ public:
     return make_pair(this->begin(), false);
   }
 
-  bool remove(const key_type &k) {
+  pair<iterator, bool> insertEqual(const value_type& val) {
+    iterator it = this->findEqual(val.first);
+    if (it == this->end()) {
+      this->push_back(val);
+      return make_pair(this->end() - 1, true);
+    }
+    value_type temp = *this->begin();
+    *this->begin() = *it;
+    *it = temp;
+    return make_pair(this->begin(), false);
+  }
+
+  bool remove(const key_type& k) {
     iterator it = this->find(k);
     if (it == this->end()) {
       return false;
@@ -91,7 +113,7 @@ public:
     return true;
   }
 
-  mapped_type &get(const key_type &k) {
+  mapped_type& get(const key_type& k) {
     iterator it = this->find(k);
     if (it == this->end()) {
       throw SmallMapGetError();
@@ -99,7 +121,7 @@ public:
     return it->second;
   }
 
-  const mapped_type &get(const key_type &k) const {
+  const mapped_type& get(const key_type& k) const {
     const_iterator it = this->find(k);
     if (it == this->end()) {
       throw SmallMapGetError();
@@ -107,19 +129,16 @@ public:
     return it->second;
   }
 
-  mapped_type &operator[](const key_type &k) {
-    return (*((this->insert(std::make_pair(k, mapped_type()))).first)).second;
-  }
+  mapped_type& operator[](const key_type& k) { return (*((this->insert(std::make_pair(k, mapped_type()))).first)).second; }
 
-  mapped_type &operator[](key_type &&k) {
-    return (*((this->insert(std::make_pair(k, mapped_type()))).first)).second;
-  }
+  mapped_type& operator[](key_type&& k) { return (*((this->insert(std::make_pair(k, mapped_type()))).first)).second; }
 
-  void set(const key_type &k, const mapped_type &v) {
-    (*((this->insert(std::make_pair(k, mapped_type()))).first)).second = v;
+  /* Add the (k,v) pair using EQ comparison */
+  void set(const key_type& k, const mapped_type& v) { (*((this->insert(std::make_pair(k, mapped_type()))).first)).second = v; }
+  /* Add the (k,v) pair using EQUAL comparison */
+  void setEqual(const key_type& k, const mapped_type& v) {
+    (*((this->insertEqual(std::make_pair(k, mapped_type()))).first)).second = v;
   }
 };
 
 } // namespace gctools
-
-#endif

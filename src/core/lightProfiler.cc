@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -38,8 +38,7 @@ LightEventCounter::LightEventCounter() {
   this->_Problems = 0;
 }
 
-LightEventCounter::~LightEventCounter() {
-}
+LightEventCounter::~LightEventCounter() {}
 
 void LightEventCounter::recordCallAndProblem(bool prob) {
   this->_Calls++;
@@ -47,14 +46,16 @@ void LightEventCounter::recordCallAndProblem(bool prob) {
     this->_Problems++;
 }
 
-LightTimer::LightTimer(LightProfiler *profiler) : _Profiler(profiler), _Id(0), _IsOn(false), _AccumulatedTime(0.0), _Calls(0), _ClockResolutionFails(0), _Parent(UndefinedUnsignedInt), _Sibling(UndefinedUnsignedInt), _Child(UndefinedUnsignedInt), _StartTime(0.0) {
+LightTimer::LightTimer(LightProfiler* profiler)
+    : _Profiler(profiler), _Id(0), _IsOn(false), _AccumulatedTime(0.0), _Calls(0), _ClockResolutionFails(0),
+      _Parent(UndefinedUnsignedInt), _Sibling(UndefinedUnsignedInt), _Child(UndefinedUnsignedInt), _StartTime(0.0) {
 #ifdef DARWIN_CLOCK
   mach_timebase_info_data_t info;
   kern_return_t err = mach_timebase_info(&info);
   if (err == 0) {
     this->_DarwinConversion = 1.0e-9 * (double)info.numer / (double)info.denom;
   } else {
-    THROW_HARD_ERROR(BF("Could not determine clock conversion"));
+    THROW_HARD_ERROR("Could not determine clock conversion");
   }
 #else
 // #error "What initialization needs to be done for LightTimer on non DARWIN systems"
@@ -63,7 +64,7 @@ LightTimer::LightTimer(LightProfiler *profiler) : _Profiler(profiler), _Id(0), _
 
 void LightTimer::addChild(uint childIndex) {
   HARD_ASSERT(this->_Profiler != NULL);
-  LightTimer &child = this->_Profiler->timer(childIndex);
+  LightTimer& child = this->_Profiler->timer(childIndex);
   child._Sibling = this->_Child;
   this->_Child = childIndex;
 }
@@ -86,7 +87,7 @@ void LightTimer::stop() {
   clock_t end;
 #endif
   if (!this->_IsOn) {
-    THROW_HARD_ERROR(boost::format("Timer %s is not on") % this->_Description);
+    THROW_HARD_ERROR("Timer {} is not on", this->_Description);
   }
   this->_IsOn = false;
 #ifdef DARWIN_CLOCK
@@ -109,8 +110,7 @@ uint LightProfiler::createEventCounter(string name) {
   return this->_EventCounters.size() - 1;
 }
 
-uint LightProfiler::createTimer(uint parent, const string &name) {
-  _G();
+uint LightProfiler::createTimer(uint parent, const string& name) {
   LightTimer child(this);
   ;
   if (this->_Timers.size() == 0) {
@@ -131,11 +131,11 @@ LightTimer*	LightProfiler::getTimer(uint id)
 {
 LightTimer	*timer;
     if ( id >= this->_Timers.size() ) {
-	SIMPLE_ERROR(BF("Illegal timer id" ));
+	SIMPLE_ERROR("Illegal timer id");
     }
     timer = this->_Timers[id];
     if ( timer == NULL ) {
-	SIMPLE_ERROR(BF("Undefined timer" ));
+	SIMPLE_ERROR("Undefined timer");
     }
     return timer;
 }
@@ -166,7 +166,7 @@ void LightProfiler::createTimers(uint num) {
 
 double LightProfiler::getLongestTime() {
   double max = 0.0;
-  for (auto &t : this->_Timers) {
+  for (auto& t : this->_Timers) {
     if (max < t.getAccumulatedTime()) {
       max = t.getAccumulatedTime();
     }
@@ -175,13 +175,13 @@ double LightProfiler::getLongestTime() {
 }
 
 void LightProfiler::resetAllTimers() {
-  for (auto &t : this->_Timers) {
+  for (auto& t : this->_Timers) {
     t.reset();
   }
 }
 
 void LightProfiler::stopAllTimers() {
-  for (auto &t : this->_Timers) {
+  for (auto& t : this->_Timers) {
     t.stop();
   }
 }
@@ -200,9 +200,7 @@ void LightProfiler::dumpChildTimers(uint level, uint top) {
   prefix << "%" << level + 20 << "s";
   printf("\n%s%s", prefix.str().c_str(), this->_Timers[top].getDescription().c_str());
   if (this->_Timers[top].getClockResolutionFails()) {
-    printf("\n %10.4lf s  %6d calls  %6d clockResFails",
-           this->_Timers[top].getAccumulatedTime(),
-           this->_Timers[top].getCalls(),
+    printf("\n %10.4lf s  %6d calls  %6d clockResFails", this->_Timers[top].getAccumulatedTime(), this->_Timers[top].getCalls(),
            this->_Timers[top].getClockResolutionFails());
   } else {
     printf("\n %10.4lf s  %6d calls\n", this->_Timers[top].getAccumulatedTime(), this->_Timers[top].getCalls());
@@ -211,7 +209,6 @@ void LightProfiler::dumpChildTimers(uint level, uint top) {
 }
 
 void LightProfiler::dump() {
-  _G();
   int root;
   if (!this->_MessagesEnabled)
     return;
@@ -221,17 +218,18 @@ void LightProfiler::dump() {
 
   if (this->_Timers.size() <= 1)
     return;
-  HARD_ASSERTF(this->_Timers.size() >= 2, BF("There is no timer root"));
+  GCTOOLS_ASSERTF(this->_Timers.size() >= 2, "There is no timer root");
 
   root = 1;
   if (!root) {
-    THROW_HARD_ERROR(BF("There is no root timer!!!!!"));
+    THROW_HARD_ERROR("There is no root timer!!!!!");
   }
   //
   // Find the root timer
   //
   while (this->_Timers[root].getParent() != UndefinedUnsignedInt) {
-    //	printf("\n%s:%d  looking for root - this->_Timers[%d]._Parent = %d", __FILE__,__LINE__,root,this->_Timers[root].getParent());
+    //	printf("\n%s:%d  looking for root - this->_Timers[%d]._Parent = %d",
+    //__FILE__,__LINE__,root,this->_Timers[root].getParent());
     root = this->_Timers[root].getParent();
   }
 #ifdef DARWIN_CLOCK
@@ -252,9 +250,8 @@ void LightProfiler::dump() {
     int calls = this->_EventCounters[i].getCalls();
     if (calls == 0)
       continue;
-    printf("\n %40s %10d problems over %10d calls (%lf%% problems)",
-           this->_EventCounters[i].getDescription().c_str(),
-           problems, calls, (1.0 * problems) / calls);
+    printf("\n %40s %10d problems over %10d calls (%lf%% problems)", this->_EventCounters[i].getDescription().c_str(), problems,
+           calls, (1.0 * problems) / calls);
   }
   printf("\n");
 }
@@ -299,19 +296,17 @@ void LightProfiler::popTimerStates() {
   this->_TimerStateStack.erase(this->_TimerStateStack.end() - 1);
 }
 
-LightEventCounter &LightProfiler::eventCounter(uint c) {
-  _OF();
+LightEventCounter& LightProfiler::eventCounter(uint c) {
+
   ASSERT_lessThan(c, this->_EventCounters.size());
   return this->_EventCounters[c];
 }
 
-LightTimer &LightProfiler::timer(uint c) {
-  _OF();
+LightTimer& LightProfiler::timer(uint c) {
+
   ASSERT_lessThan(c, this->_Timers.size());
   return this->_Timers[c];
 }
 
-void LightProfiler::disableMessages() {
-  this->_MessagesEnabled = false;
-}
-};
+void LightProfiler::disableMessages() { this->_MessagesEnabled = false; }
+}; // namespace core

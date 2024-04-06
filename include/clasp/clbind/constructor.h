@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: constructor.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,8 +26,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef clbind_constructor_H
-#define clbind_constructor_H
 
 #include <clasp/clbind/adapter.fwd.h>
 #include <clasp/clbind/clbind_wrappers.h>
@@ -35,217 +35,208 @@ THE SOFTWARE.
 
 namespace clbind {
 
-template <typename... SIGS>
-struct constructor {};
+template <typename... SIGS> struct constructor {};
 
-typedef enum { no_default_constructor } no_default_constructor_type;
+typedef enum { create_default_constructor } default_constructor_type;
 
 typedef constructor<> default_constructor;
 
-class ConstructorCreator : public core::Creator {
+class ConstructorCreator_O : public core::Creator_O {
+  LISP_ABSTRACT_CLASS(clbind, ClbindPkg, ConstructorCreator_O, "ConstructorCreator", core::Creator_O);
+
 public:
-  ConstructorCreator(core::Symbol_sp c) : _mostDerivedClassSymbol(c){};
+  ConstructorCreator_O(core::SimpleFun_sp ep, core::Symbol_sp c) : Creator_O(ep), _mostDerivedClassSymbol(c){};
   core::Symbol_sp _mostDerivedClassSymbol;
+  virtual ~ConstructorCreator_O(){};
 };
-};
+}; // namespace clbind
 
 namespace clbind {
 
-template <typename T, typename Pointer>
-class DefaultConstructorCreator : public ConstructorCreator {
+template <typename T, typename Pointer> class DefaultConstructorCreator_O : public ConstructorCreator_O {
 public:
-  typedef ConstructorCreator TemplatedBase;
+  typedef ConstructorCreator_O TemplatedBase;
 
 public:
   typedef Wrapper<T, Pointer> WrapperType;
-  int _Kind;
+  gctools::Header_s::StampWtagMtag _HeaderValue;
   int _duplicationLevel;
 
 public:
   virtual size_t templatedSizeof() const { return sizeof(*this); };
 
 public:
-#if 0
-        virtual GC_RESULT onHeapScanGCRoots(GC_SCAN_ARGS_PROTOTYPE)
-        {
-#ifdef USE_MPS
-            MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-                SMART_PTR_FIX(this->_mostDerivedClassSymbol);
-            } MPS_SCAN_END(GC_SCAN_STATE);
-#endif
-            return GC_RES_OK;
-        }
-#endif
-public:
-  DISABLE_NEW();
-  DefaultConstructorCreator() : ConstructorCreator(reg::lisp_classSymbol<T>())
-#ifdef USE_MPS
-                                ,
-                                _Kind(gctools::GCKind<WrapperType>::Kind)
-#endif
-                                ,
-                                _duplicationLevel(0){};
-  DefaultConstructorCreator(core::Symbol_sp cn, int kind, int dupnum)
-      : ConstructorCreator(cn), _Kind(kind), _duplicationLevel(dupnum){};
+  DefaultConstructorCreator_O(core::SimpleFun_sp ep)
+      : ConstructorCreator_O(ep, reg::lisp_classSymbol<T>()),
+        _duplicationLevel(0){};
+  DefaultConstructorCreator_O(core::SimpleFun_sp ep, core::Symbol_sp cn,
+                              const gctools::Header_s::StampWtagMtag headerValue, int dupnum)
+      : ConstructorCreator_O(ep, cn), _HeaderValue(headerValue),
+        _duplicationLevel(dupnum){};
 
   /*! If this is the allocator for the original Adapter class return true - otherwise false */
   virtual int duplicationLevel() const { return this->_duplicationLevel; };
-  void describe() const {
-    stringstream ss;
-    core::Symbol_sp baseClassSymbol = reg::lisp_classSymbol<T>();
-    ss << "DefaultConstructorCreator for class " << _rep_(baseClassSymbol);
-    if (baseClassSymbol != this->_mostDerivedClassSymbol) {
-      ss << " derived class " << _rep_(this->_mostDerivedClassSymbol);
-    }
-    printf("%s", ss.str().c_str());
-  }
-  core::T_sp allocate() {
-    T *naked_ptr(new T());
+  core::T_sp creator_allocate() {
+    T* naked_ptr(new T());
     //            printf("%s:%d - creating WrapperType\n", __FILE__,__LINE__);
-    gctools::smart_ptr<WrapperType> retval = WrapperType::create(naked_ptr, reg::registered_class<T>::id);
+    gctools::smart_ptr<WrapperType> retval = WrapperType::make_wrapper(naked_ptr, reg::registered_class<T>::id);
     //            clbind::support_enable_wrapper_from_this<T,Pointer>(retval,naked_ptr,naked_ptr);
     return retval;
   }
-  gc::tagged_pointer<Creator> duplicateForClassName(core::Symbol_sp className) {
-    gc::tagged_pointer<Creator> allocator = gctools::ClassAllocator<DefaultConstructorCreator<T, Pointer>>::allocateClass(className, this->_Kind, this->_duplicationLevel + 1);
+  core::Creator_sp duplicateForClassName(core::Symbol_sp className) {
+    printf("%s:%d  duplicateForClassName %s  this->_HeaderValue = %lu\n", __FILE__, __LINE__, _rep_(className).c_str(),
+           (uintptr_t)this->_HeaderValue._value);
+    core::SimpleFun_sp fdesc = core::makeSimpleFunAndFunctionDescription<DefaultConstructorCreator_O<T, Pointer>>(
+        nil<core::T_O>());
+    core::Creator_sp allocator = gc::As<core::Creator_sp>(gc::GC<DefaultConstructorCreator_O<T, Pointer>>::allocate(
+        fdesc, className, this->_HeaderValue, this->_duplicationLevel + 1));
     return allocator;
   }
 };
-};
+}; // namespace clbind
 
-template <typename T, typename Pointer>
-class gctools::GCKind<clbind::DefaultConstructorCreator<T, Pointer>> {
+template <typename T, typename Pointer> class gctools::GCStamp<clbind::DefaultConstructorCreator_O<T, Pointer>> {
 public:
-  static gctools::GCKindEnum const Kind = gctools::GCKind<typename clbind::DefaultConstructorCreator<T, Pointer>::TemplatedBase>::Kind;
+  static gctools::GCStampEnum const StampWtag =
+      gctools::GCStamp<typename clbind::DefaultConstructorCreator_O<T, Pointer>::TemplatedBase>::StampWtag;
 };
 
 namespace clbind {
 
-template <typename T>
-class DerivableDefaultConstructorCreator : public ConstructorCreator {
+template <typename T> class DerivableDefaultConstructorCreator_O : public ConstructorCreator_O {
 public:
-  typedef ConstructorCreator TemplatedBase;
+  typedef ConstructorCreator_O TemplatedBase;
 
 public:
-  int _Kind;
+  gctools::Header_s::StampWtagMtag _Header;
   int _duplicationLevel;
 
 public:
-  DISABLE_NEW();
-
 public:
   virtual size_t templatedSizeof() const { return sizeof(*this); };
-#if 0
-        virtual GC_RESULT onHeapScanGCRoots(GC_SCAN_ARGS_PROTOTYPE)
-        {
-#ifdef USE_MPS
-            MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-                SMART_PTR_FIX(this->_mostDerivedClassSymbol);
-            } MPS_SCAN_END(GC_SCAN_STATE);
-#endif
-            return GC_RES_OK;
-        }
-#endif
+
 public:
-  DerivableDefaultConstructorCreator() : ConstructorCreator(reg::lisp_classSymbol<T>())
-#ifdef USE_MPS
-                                         ,
-                                         _Kind(gctools::GCKind<T>::Kind)
-#endif
-                                         ,
-                                         _duplicationLevel(0){};
-  DerivableDefaultConstructorCreator(core::Symbol_sp cn, int kind, int dupnum)
-      : ConstructorCreator(cn), _Kind(kind), _duplicationLevel(dupnum){};
+  DerivableDefaultConstructorCreator_O(core::SimpleFun_sp ep)
+      : ConstructorCreator_O(ep, reg::lisp_classSymbol<T>()), _duplicationLevel(0){};
+  DerivableDefaultConstructorCreator_O(core::SimpleFun_sp ep, core::Symbol_sp cn,
+                                       const gctools::Header_s::StampWtagMtag& header, int dupnum)
+    : ConstructorCreator_O(ep, cn), _Header(header), _duplicationLevel(dupnum){};
 
   /*! If this is the allocator for the original Adapter class return true - otherwise false */
   virtual int duplicationLevel() const { return this->_duplicationLevel; };
-  void describe() const {
-    stringstream ss;
-    core::Symbol_sp baseClassSymbol = reg::lisp_classSymbol<T>();
-    ss << "DerivableDefaultConstructorCreator for class " << _rep_(baseClassSymbol);
-    if (baseClassSymbol != this->_mostDerivedClassSymbol) {
-      ss << " derived class " << _rep_(this->_mostDerivedClassSymbol);
-    }
-    printf("%s", ss.str().c_str());
-  }
-  core::T_sp allocate() {
-    //            printf("%s:%d Allocating instance of Derivable class: %s\n", __FILE__, __LINE__, _rep_(this->_mostDerivedClassSymbol).c_str());
-    GC_ALLOCATE(T, obj);
-    //            printf("%s:%d obj.px_ref() = %p\n", __FILE__, __LINE__, obj.px_ref());
-    //            printf("%s:%d obj.px_ref()->pointerToAlienWithin() = %p\n", __FILE__, __LINE__, obj.px_ref()->pointerToAlienWithin());
-    //            printf("%s:%d typeid(obj.px_ref())@%p  typeid(obj.px_ref()).name=%s\n", __FILE__, __LINE__, &typeid(obj.px_ref()),typeid(obj.px_ref()).name());
-
-    //            clbind::support_enable_wrapper_from_this<T,Pointer>(retval,naked_ptr,naked_ptr);
+  core::T_sp creator_allocate() {
+    auto obj = gctools::GC<T>::allocate_with_default_constructor();
     return obj;
   }
-  gc::tagged_pointer<Creator> duplicateForClassName(core::Symbol_sp className) {
-    return gctools::ClassAllocator<DerivableDefaultConstructorCreator<T>>::allocateClass(className, this->_Kind, this->_duplicationLevel + 1);
+  core::Creator_sp duplicateForClassName(core::Symbol_sp className) {
+    //    printf("%s:%d DerivableDefaultConstructorCreator_O  duplicateForClassName %s  this->_Kind = %u\n", __FILE__, __LINE__,
+    //    _rep_(className).c_str(), this->_Kind);
+    core::SimpleFun_sp entryPoint = core::makeSimpleFunAndFunctionDescription<DerivableDefaultConstructorCreator_O<T>>(
+        nil<core::T_O>());
+    return gc::As_unsafe<core::Creator_sp>(gc::GC<DerivableDefaultConstructorCreator_O<T>>::allocate(
+        entryPoint, className, this->_Header, this->_duplicationLevel + 1));
   }
 };
-};
+}; // namespace clbind
 
-template <typename T>
-class gctools::GCKind<clbind::DerivableDefaultConstructorCreator<T>> {
+template <typename T> class gctools::GCStamp<clbind::DerivableDefaultConstructorCreator_O<T>> {
 public:
-  static gctools::GCKindEnum const Kind = gctools::GCKind<typename clbind::DerivableDefaultConstructorCreator<T>::TemplatedBase>::Kind;
+  static gctools::GCStampEnum const StampWtag =
+      gctools::GCStamp<typename clbind::DerivableDefaultConstructorCreator_O<T>::TemplatedBase>::StampWtag;
 };
 
 namespace clbind {
-template <typename Policies, typename T>
-class DerivableDefaultConstructorFunctoid : public core::Functoid {
+template <typename Policies, typename T> class DerivableDefaultConstructorFunctor : public core::Function_O {
 public:
-  typedef core::Functoid TemplatedBase;
+  typedef core::Function_O TemplatedBase;
 
 public:
   enum { NumParams = 0 };
-  DerivableDefaultConstructorFunctoid(core::T_sp name) : core::Functoid(name){};
+  DerivableDefaultConstructorFunctor(core::SimpleFun_sp ep) : core::Function_O(ep){};
 
 public:
   virtual size_t templatedSizeof() const { return sizeof(*this); };
 
 public:
-  DISABLE_NEW();
-#if 0
-        core::T_mv activate( core::ActivationFrame_sp closedOverFrame, int numArgs, ArgArray args )
-        {
-            int countPureOutValues = CountPureOutValues<Policies>::value;
-            if ( numArgs != (NumParams-countPureOutValues) )
-            {
-                core::wrongNumberOfArguments(numArgs,(NumParams-countPureOutValues));
-            }
-            GC_ALLOCATE(T,obj_gc_safe);
-            printf("%s:%d Allocating instance of Derivable class: %s\n", __FILE__, __LINE__, this->_Name.c_str() );
-            int oidx = 1;
-            return gctools::multiple_values<core::T_O>(obj_gc_safe,oidx);
-        }
-#endif
+  static inline LCC_RETURN LISP_CALLING_CONVENTION() { SIMPLE_ERROR("What do we do when this is called?"); }
+  template <typename... Ts>
+  static inline LCC_RETURN entry_point_fixed(core::T_O* lcc_closure,
+                                             Ts... args) {
+    SIMPLE_ERROR("What do we do when this is called?");
+  }
 };
-};
-
-template <typename Policies, typename T>
-class gctools::GCKind<clbind::DerivableDefaultConstructorFunctoid<Policies, T>> {
-public:
-  static gctools::GCKindEnum const Kind = gctools::GCKind<typename clbind::DerivableDefaultConstructorFunctoid<Policies, T>::TemplatedBase>::Kind;
-};
+}; // namespace clbind
 
 namespace clbind {
 
-template <typename Pols, typename Pointer, typename T, typename Sig>
-class VariadicConstructorFunctoid : public core::BuiltinClosure {
+template <typename Sig, typename Pols, typename Pointer, typename T> class WRAPPER_Constructor_O;
+};
+
+namespace clbind {
+template <typename ConstructorPtrType, typename Policies, typename Pointer, typename ConstructType>
+class WRAPPER_Constructor_O : public core::SimpleFun_O {};
+
+template <typename... ARGS, typename Policies, typename Pointer, typename ConstructType>
+class WRAPPER_Constructor_O<constructor<ARGS...>, Policies, Pointer, ConstructType>
+    : public core::SimpleFun_O {
 public:
-  typedef core::BuiltinClosure TemplatedBase;
+  typedef WRAPPER_Constructor_O<constructor<ARGS...>, Policies, Pointer, ConstructType> MyType;
+  typedef core::SimpleFun_O TemplatedBase;
+  typedef Wrapper<ConstructType, Pointer> WrapperType;
 
 public:
+public:
+  virtual const char* describe() const { return "VariadicConstructorFunctor"; };
+  enum { NumParams = sizeof...(ARGS) };
+  WRAPPER_Constructor_O(core::FunctionDescription_sp fdesc)
+    : core::SimpleFun_O(fdesc, nil<core::T_O>(), core::XepStereotype<MyType>()){};
   virtual size_t templatedSizeof() const { return sizeof(*this); };
-};
 
-#include <clasp/clbind/generated/clbind_constructor_functoids.h>
-};
+  static inline LCC_RETURN entry_point_n(core::T_O* lcc_closure, size_t lcc_nargs,
+                                         core::T_O** lcc_args) {
+    DO_DRAG_CXX_CALLS();
+    if (lcc_nargs != NumParams)
+      cc_wrong_number_of_arguments(lcc_closure, lcc_nargs, NumParams, NumParams);
+    auto all_args = arg_tuple<0, policies<>, ARGS...>::goFrame(lcc_args);
+    return constructor_apply_and_return<WrapperType, Policies, ConstructType, decltype(all_args)>::go(std::move(all_args));
+  }
 
-template <typename Pols, typename Pointer, typename T, typename Sig>
-class gctools::GCKind<clbind::VariadicConstructorFunctoid<Pols, Pointer, T, Sig>> {
+  template <typename... Ts>
+  static inline LCC_RETURN entry_point_fixed(core::T_O* lcc_closure,
+                                             Ts... args) {
+    DO_DRAG_CXX_CALLS();
+    if constexpr(sizeof...(Ts) != NumParams) {
+      cc_wrong_number_of_arguments(lcc_closure, sizeof...(Ts), NumParams, NumParams);
+      UNREACHABLE();
+    } else {
+      auto all_args = arg_tuple<0, policies<>, ARGS...>::goArgs(args...);
+      return constructor_apply_and_return<WrapperType, Policies, ConstructType, decltype(all_args)>::go(std::move(all_args));
+    }
+  }
+};
+}; // namespace clbind
+
+template <typename Sig, typename Pols, typename Pointer, typename T>
+class gctools::GCStamp<clbind::WRAPPER_Constructor_O<Sig, Pols, Pointer, T>> {
 public:
-  static gctools::GCKindEnum const Kind = gctools::GCKind<typename clbind::VariadicConstructorFunctoid<Pols, Pointer, T, Sig>::TemplatedBase>::Kind;
+  static gctools::GCStampEnum const StampWtag =
+      gctools::GCStamp<typename clbind::WRAPPER_Constructor_O<Sig, Pols, Pointer, T>::TemplatedBase>::StampWtag;
 };
 
-#endif
+template <typename Sig, typename Pols, typename Pointer, typename T>
+struct gctools::Inherits<typename clbind::WRAPPER_Constructor_O<Sig, Pols, Pointer, T>::TemplatedBase,
+                         clbind::WRAPPER_Constructor_O<Sig, Pols, Pointer, T>> : public std::true_type {};
+
+template <typename Policies, typename T> class gctools::GCStamp<clbind::DerivableDefaultConstructorFunctor<Policies, T>> {
+public:
+  static gctools::GCStampEnum const StampWtag =
+      gctools::GCStamp<typename clbind::DerivableDefaultConstructorFunctor<Policies, T>::TemplatedBase>::StampWtag;
+};
+template <typename Policies, typename T>
+struct gctools::Inherits<typename clbind::DerivableDefaultConstructorFunctor<Policies, T>::TemplatedBase,
+                         clbind::DerivableDefaultConstructorFunctor<Policies, T>> : public std::true_type {};
+
+namespace clbind {
+template <typename... SIGS> using init = constructor<SIGS...>;
+
+};

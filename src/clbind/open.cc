@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -54,114 +54,90 @@ THE SOFTWARE.
 
 #include <clasp/clbind/clbind.h>
 #include <clasp/clbind/class_registry.h>
-#include <clasp/clbind/symbolTable.h>
-//#include <clasp/clbind/function.h>
-//#include <clasp/clbind/get_main_thread.h>
+#include <clasp/core/symbolTable.h>
+// #include <clasp/clbind/function.h>
+// #include <clasp/clbind/get_main_thread.h>
 
 namespace clbind {
 
 //! Take the place of __clbind_cast_graph
-detail::cast_graph *globalCastGraph;
+detail::cast_graph* globalCastGraph;
 //! Take the place of __clbind_class_id_map
-detail::class_id_map *globalClassIdMap;
-//! Take the place of __clbind_class_map
-gctools::tagged_pointer<detail::class_map> globalClassMap;
+detail::class_id_map* globalClassIdMap;
 
-namespace {
-#if 0
-  int make_property()
-  {
-      IMPLEMENT_ME();
-#if 0
-      int args = cl_gettop(L);
+class Test {
+public:
+  Test() : multiplier(1234){};
 
-      if (args == 0 || args > 2)
-      {
-          cl_pushstring(L, "make_property() called with wrong number of arguments.");
-          cl_error(L);
-      }
+public:
+  int multiplier;
+  std::vector<int> numbers;
 
-      if (args == 1)
-          cl_pushnil(L);
-
-      cl_pushcclosure(L, &detail::property_tag, 2);
-      return 1;
-#endif
+  void setMultiplier(int m) { this->multiplier = m; }
+  void set2(int n0, int n1) {
+    this->numbers.clear();
+    printf("%s:%d In set2 n0-> %d n1-> %d\n", __FILE__, __LINE__, n0, n1);
+    this->numbers.push_back(n0);
+    this->numbers.push_back(n1);
   }
 
-  int main_thread_tag;
-
-  int deprecated_super()
-  {
-      IMPLEMENT_ME();
-#if 0
-      cl_pushstring(L,
-          "DEPRECATION: 'super' has been deprecated in favor of "
-          "directly calling the base class __init() function. "
-          "This error can be disabled by calling 'clbind::disable_super_deprecation()'."
-      );
-      cl_error(L);
-
-      return 0;
-#endif
+  void set3(int n0, int n1, int n2) {
+    this->numbers.clear();
+    this->numbers.push_back(n0);
+    this->numbers.push_back(n1);
+    this->numbers.push_back(n2);
   }
 
-  int destroy_class_id_map()
-  {
-      IMPLEMENT_ME();
-#if 0
-      detail::class_id_map* m =
-          (detail::class_id_map*)cl_touserdata(L, 1);
-      m->~class_id_map();
-      return 0;
-#endif
+  void set4(int n0, int n1, int n2, int n3) {
+    this->numbers.clear();
+    this->numbers.push_back(n0);
+    this->numbers.push_back(n1);
+    this->numbers.push_back(n2);
+    this->numbers.push_back(n3);
   }
 
-  int destroy_cast_graph()
-  {
-      IMPLEMENT_ME();
-#if 0
-      detail::cast_graph* g =
-          (detail::cast_graph*)cl_touserdata(L, 1);
-      g->~cast_graph();
-      return 0;
-#endif
+  void set5(int n0, int n1, int n2, int n3, int n4) {
+    this->numbers.clear();
+    this->numbers.push_back(n0);
+    this->numbers.push_back(n1);
+    this->numbers.push_back(n2);
+    this->numbers.push_back(n3);
+    this->numbers.push_back(n4);
   }
 
-  int destroy_class_map()
-  {
-      IMPLEMENT_ME();
-#if 0
-      detail::class_map* m =
-          (detail::class_map*)cl_touserdata(L, 1);
-      m->~class_map();
-      return 0;
-#endif
+  void set6(int n0, int n1, int n2, int n3, int n4, int n5) {
+    this->numbers.clear();
+    this->numbers.push_back(n0);
+    this->numbers.push_back(n1);
+    this->numbers.push_back(n2);
+    this->numbers.push_back(n3);
+    this->numbers.push_back(n4);
+    this->numbers.push_back(n5);
   }
-#endif
-} // namespace unnamed
 
-CLBIND_API int get_main_thread() {
-  IMPLEMENT_ME();
-#if 0
-        cl_pushlightuserdata(L, &main_thread_tag);
-        cl_rawget(L, CL_REGISTRYINDEX);
-        cl_State* result = static_cast<cl_State*>(cl_touserdata(L, -1));
-        cl_pop(L, 1);
+  void print_numbers() {
+    int idx = 0;
+    for (auto n : this->numbers) {
+      printf("%s:%d number[%d] -> %d\n", __FILE__, __LINE__, idx, n * this->multiplier);
+      ++idx;
+    }
+  }
+};
 
-        if (!result)
-            throw std::runtime_error("Unable to get main thread, clbind::open() not called?");
+class TestChild : public Test {
+public:
+  TestChild() : Test(){};
+};
 
-        return result;
-#endif
-}
+void initializeCastGraph() {
+  globalClassIdMap = new detail::class_id_map();
+  globalCastGraph = new detail::cast_graph();
+};
 
 CLBIND_API void initialize_clbind() {
   ClassRegistry_sp registry = ClassRegistry_O::create();
   _sym_STARtheClassRegistrySTAR->defparameter(registry);
-  globalClassIdMap = new detail::class_id_map();
-  globalCastGraph = new detail::cast_graph();
-  globalClassMap = gctools::RootClassAllocator<detail::class_map>::allocate();
+  initializeCastGraph();
 }
 
 } // namespace clbind

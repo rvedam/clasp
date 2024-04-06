@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -38,32 +38,47 @@ THE SOFTWARE.
 namespace ext {
 using namespace core;
 
-#pragma GCC visibility push(default)
-#define ExtPkg_SYMBOLS
-#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
-#include SYMBOLS_SCRAPED_INC_H
-#undef DO_SYMBOL
-#undef ExtPkg_SYMBOLS
-#pragma GCC visibility pop
-
-SYMBOL_EXPORT_SC_(ExtPkg, STARloadHooksSTAR);
-SYMBOL_SC_(ExtPkg, aSingleExtSymbol);
-SYMBOL_SC_(ExtPkg, lambda_block);
-SYMBOL_EXPORT_SC_(ExtPkg, STARinvokeDebuggerHookSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, STARclasp_clang_pathSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, STARdefault_external_formatSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, STARinspectorHookSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, STARinvoke_debugger_hookSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, STARtoplevel_hookSTAR);
+SYMBOL_EXPORT_SC_(ExtPkg, _PLUS_processErrorOutput_PLUS_);
+SYMBOL_EXPORT_SC_(ExtPkg, _PLUS_processStandardInput_PLUS_);
+SYMBOL_EXPORT_SC_(ExtPkg, _PLUS_processStandardOutput_PLUS_);
+SYMBOL_EXPORT_SC_(ExtPkg, _PLUS_process_terminal_io_PLUS_);
+SYMBOL_EXPORT_SC_(ExtPkg, allocaVar);
+SYMBOL_EXPORT_SC_(ExtPkg, ansi_stream);
+SYMBOL_EXPORT_SC_(ExtPkg, array_index);
+SYMBOL_EXPORT_SC_(ExtPkg, assume_no_errors);
+SYMBOL_EXPORT_SC_(ExtPkg, check_arguments_type);
 SYMBOL_EXPORT_SC_(ExtPkg, compiledFunctionName);
+SYMBOL_EXPORT_SC_(ExtPkg, constant_form_value);
+SYMBOL_EXPORT_SC_(ExtPkg, decoding_error);
+SYMBOL_EXPORT_SC_(ExtPkg, encoding_error);
+SYMBOL_EXPORT_SC_(ExtPkg, float_infinity_string);
+SYMBOL_EXPORT_SC_(ExtPkg, float_nan_string);
+SYMBOL_EXPORT_SC_(ExtPkg, ignore_signal);
+SYMBOL_EXPORT_SC_(ExtPkg, lambda_block);
+SYMBOL_EXPORT_SC_(ExtPkg, lexicalVar);
+SYMBOL_EXPORT_SC_(ExtPkg, llvmRegisterVar);
+SYMBOL_EXPORT_SC_(ExtPkg, make_encoding);
+SYMBOL_EXPORT_SC_(ExtPkg, parse_macro);
+SYMBOL_EXPORT_SC_(ExtPkg, specialVar);
+SYMBOL_EXPORT_SC_(ExtPkg, unix_signal_received);
 
 #define ARGS_af_maybeQuote "(form)"
 #define DECL_af_maybeQuote ""
 #define DOCS_af_maybeQuote "Quotes a form only if strictly required. This happens when FORM is either a symbol and not a keyword"
-T_sp af_maybeQuote(T_sp form) {
-  _G();
-  if (cl_atom(form)) {
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp ext__maybeQuote(core::T_sp form) {
+  if (cl__atom(form)) {
     if (form.nilp())
       goto DONTQUOTEIT; // nil
     if (form == _lisp->_true())
       goto DONTQUOTEIT; // t
-    if (cl_symbolp(form)) {
-      if (af_keywordP(form)) {
+    if (cl__symbolp(form)) {
+      if (cl__keywordp(form)) {
         goto DONTQUOTEIT; // symbol keyword
       } else
         goto QUOTEIT; // symbol not keyword
@@ -79,15 +94,8 @@ DONTQUOTEIT:
   return form;
 }
 
-void initialize_extension_functions() {
-  SYMBOL_EXPORT_SC_(ExtPkg, maybeQuote);
-  Defun(maybeQuote);
-};
+SYMBOL_EXPORT_SC_(ExtPkg, maybeQuote);
 
-void initialize_extensionPackage() {
-  list<string> lnicknames;
-  list<string> luse = {"COMMON-LISP"};
-  _lisp->makePackage("EXT", lnicknames, luse);
-  // We don't have to create the EXTENSION symbols here - it's done in bootStrapCoreSymbolMap
-}
-};
+SYMBOL_EXPORT_SC_(ExtPkg, undefinedClass);
+
+}; // namespace ext

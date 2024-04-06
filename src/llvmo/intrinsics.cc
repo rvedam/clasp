@@ -1,5 +1,7 @@
 /*
     File: intrinsics.cc
+    Small functions used by the runtime that may be inlined at the
+    compiler's discretion.
 */
 
 /*
@@ -24,255 +26,623 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LANDING_PAD 1
-
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 #ifdef USE_MPS
 extern "C" {
 #include <clasp/mps/code/mps.h>
 };
 #endif
+
+#include <cctype>
+#include <cstdint>
 #include <typeinfo>
+
 #include <clasp/core/foundation.h>
 #include <clasp/core/common.h>
+#include <clasp/core/numbers.h>
 #include <clasp/core/bignum.h>
 #include <clasp/core/character.h>
 #include <clasp/core/symbolTable.h>
-#include <clasp/core/arrayObjects.h>
-#include <clasp/core/vectorObjects.h>
 #include <clasp/core/arguments.h>
+#include <clasp/core/lisp.h>
 #include <clasp/core/designators.h>
 #include <clasp/core/compPackage.h>
 #include <clasp/core/package.h>
+#include <clasp/core/fli.h>
+#include <clasp/core/instance.h>
+#include <clasp/core/funcallableInstance.h>
+#include <clasp/core/wrappedPointer.h>
 #include <clasp/core/hashTable.h>
 #include <clasp/core/evaluator.h>
+#include <clasp/core/derivableCxxObject.h>
 #include <clasp/core/sourceFileInfo.h>
 #include <clasp/core/loadTimeValues.h>
 #include <clasp/core/multipleValues.h>
-#include <clasp/core/stacks.h>
-#include <clasp/core/posixTime.h>
 #include <clasp/core/numbers.h>
-#include <clasp/core/activationFrame.h>
-#include <clasp/core/vectorObjectsWithFillPtr.h>
-#include <clasp/core/str.h>
-#include <clasp/llvmo/symbolTable.h>
+#include <clasp/core/array.h>
+#include <clasp/core/fli.h>
+#include <clasp/core/debugger.h>
+#include <clasp/core/symbolTable.h>
 #include <clasp/llvmo/llvmoExpose.h>
 #include <clasp/llvmo/intrinsics.h>
-
-#define DEBUG_FLOW_CONTROL 1
 
 using namespace core;
 
 #pragma GCC visibility push(default)
 
 extern "C" {
-
-ALWAYS_INLINE core::T_sp *loadTimeValueReference(core::LoadTimeValues_O **ltvPP, int index) {
-  core::LoadTimeValues_O *tagged_ltvP = *ltvPP;
-  core::LoadTimeValues_O *ltvP = gctools::untag_general<core::LoadTimeValues_O *>(tagged_ltvP);
-  core::T_sp &result = ltvP->data_element(index);
-  return &result;
-}
-
-ALWAYS_INLINE core::Symbol_sp *loadTimeSymbolReference(core::LoadTimeValues_O **ltvPP, int index) {
-  core::LoadTimeValues_O *tagged_ltvP = *ltvPP;
-  core::LoadTimeValues_O *ltvP = gctools::untag_general<core::LoadTimeValues_O *>(tagged_ltvP);
-  core::Symbol_sp &result = ltvP->symbols_element(index);
-#ifdef DEBUG_LOAD_TIME_VALUES
-//        printf("%s:%d loadTimeSymbolReference@%p  index[%d]  result client@%p  value: %s\n", __FILE__, __LINE__, (*ltvPP), index, result.pbase(), _rep_(result).c_str());
-#endif
-  return &result;
-}
-
-ALWAYS_INLINE void newTsp(core::T_sp *sharedP) {
-  ASSERT(sharedP != NULL);
-  new (sharedP) core::T_sp();
-}
-
-ALWAYS_INLINE void newTmv(core::T_mv *sharedP) {
-  new (sharedP) core::T_mv();
-}
-
-ALWAYS_INLINE extern int compareTspTptr(core::T_sp *xP, core::T_O *yP) {
-  return ((*xP).raw_() == (yP)) ? 1 : 0;
-}
-
-ALWAYS_INLINE extern void sp_copyTsp(core::T_sp *destP, core::T_sp *sourceP) {
-  //	ASSERT(sourceP!=NULL);
-  //	ASSERT(destP!=NULL);
-  *destP = *sourceP;
-}
-
-ALWAYS_INLINE extern void mv_copyTsp(core::T_mv *destP, core::T_sp *sourceP) {
-  ASSERT(sourceP != NULL);
-  ASSERT(destP != NULL);
-  *destP = Values(*sourceP);
-}
-
-ALWAYS_INLINE extern void sp_copyTspTptr(core::T_sp *destP, core::T_O *source) {
-  *destP = gc::smart_ptr<core::T_O>((gc::Tagged)source);
-}
-
-ALWAYS_INLINE extern void mv_copyTspTptr(core::T_mv *destP, core::T_O *source) {
-  ASSERT(destP != NULL);
-  *destP = Values(gc::smart_ptr<core::T_O>((gc::Tagged)source));
-}
-
-/*! This copies a T_mv from source to dest */
-ALWAYS_INLINE void mv_copyTmvOrSlice(core::T_mv *destP, core::T_mv *sourceP) {
-  //	printf("intrinsics.cc mv_copyTmvOrSlice copying %d values\n", (*sourceP).number_of_values());
-  (*destP) = (*sourceP);
-}
-
-/*! This slices a T_mv in source down to a T_sp in dest */
-ALWAYS_INLINE void sp_copyTmvOrSlice(core::T_sp *destP, core::T_mv *sourceP) {
-  if ((*sourceP).number_of_values() == 0) {
-    (*destP) = _Nil<T_O>();
-  } else
-    (*destP) = (*sourceP);
-}
-
-ALWAYS_INLINE void sp_makeNil(core::T_sp *result) {
-  (*result) = _Nil<core::T_O>();
-}
-
-ALWAYS_INLINE void mv_makeNil(core::T_mv *result) {
-  (*result) = Values(_Nil<core::T_O>());
-}
-
-ALWAYS_INLINE void makeT(core::T_sp *result) {
-  (*result) = _lisp->_true();
-}
-
-ALWAYS_INLINE void makeCons(core::T_sp *resultConsP, core::T_sp *carP, core::T_sp *cdrP) {
-  (*resultConsP) = core::Cons_O::create(*carP, *cdrP);
-}
-
-ALWAYS_INLINE void sp_symbolValueRead(core::T_sp *resultP, const core::Symbol_sp *symP) {
-  T_sp sv = (*symP)->_Value;
-  if (sv.unboundp()) {
-    SIMPLE_ERROR(BF("Unbound symbol-value for %s") % (*symP)->_Name->c_str());
-  }
-  *resultP = sv;
-}
-ALWAYS_INLINE void mv_symbolValueRead(core::T_mv *resultP, const core::Symbol_sp *symP) {
-  T_sp sv = (*symP)->_Value;
-  if (sv.unboundp()) {
-    SIMPLE_ERROR(BF("Unbound symbol-value for %s") % (*symP)->_Name->c_str());
-  }
-  *resultP = sv;
-}
-
-ALWAYS_INLINE T_O *va_symbolFunction(core::Symbol_sp *symP) {
-  if (!(*symP)->fboundp())
-    intrinsic_error(llvmo::noFunctionBoundToSymbol, *symP);
-  core::Function_sp func((gc::Tagged)(*symP)->_Function.theObject);
-  return func.raw_();
+void invalid_index_error(void* fixnum_index, void* fixnum_max, void* fixnum_axis) {
+  SIMPLE_ERROR("Invalid index {} for axis {} of array: expected 0-{}", gctools::untag_fixnum((core::T_O*)fixnum_index),
+               gctools::untag_fixnum((core::T_O*)fixnum_axis), gctools::untag_fixnum((core::T_O*)fixnum_max));
 }
 };
 
 extern "C" {
 
-ALWAYS_INLINE T_O *cc_precalcSymbol(core::LoadTimeValues_O **tarray, size_t idx) {
-  core::LoadTimeValues_O *tagged_ltvP = *tarray;
-  core::LoadTimeValues_O *array = gctools::untag_general<core::LoadTimeValues_O *>(tagged_ltvP);
-#ifdef DEBUG_CC
-  printf("%s:%d precalcSymbol idx[%zu] symbol = %p\n", __FILE__, __LINE__, idx, (*array).symbols_element(idx).px);
+ALWAYS_INLINE core::T_O* cc_ensure_valid_object(core::T_O* tagged_object) {
+  NO_UNWIND_BEGIN();
+  return gctools::ensure_valid_object(tagged_object);
+  NO_UNWIND_END();
+}
+
+ALWAYS_INLINE core::T_O* cc_gatherVaRestArguments(Vaslist* vaslist, std::size_t nargs, Vaslist untagged_vargs_rest[2]) {
+  NO_UNWIND_BEGIN();
+  new (&untagged_vargs_rest[0]) Vaslist(nargs, vaslist->args());
+  new (&untagged_vargs_rest[1]) Vaslist(nargs, vaslist->args());
+  T_O* result = untagged_vargs_rest->asTaggedPtr();
+#ifdef DEBUG_VASLIST
+  if (_sym_STARdebugVaslistSTAR && _sym_STARdebugVaslistSTAR->symbolValue().notnilp()) {
+    printf("%s:%d:%s nargs = %lu\n", __FILE__, __LINE__, __FUNCTION__, nargs);
+    for (size_t ii = 0; ii < nargs; ++ii) {
+      printf("     vaslist[%lu] = %s\n", ii, _rep_(core::T_sp((gctools::Tagged)untagged_vargs_rest[0][ii])).c_str());
+    }
+  }
 #endif
-  T_O *res = array->symbols_element(idx).raw_();
-  ASSERT(res != NULL);
-  return res;
+  return result;
+  NO_UNWIND_END();
 }
 
-ALWAYS_INLINE T_O *cc_precalcValue(core::LoadTimeValues_O **tarray, size_t idx) {
-  core::LoadTimeValues_O *tagged_ltvP = *tarray;
-  core::LoadTimeValues_O *array = gctools::untag_general<core::LoadTimeValues_O *>(tagged_ltvP);
+ALWAYS_INLINE core::T_O* cc_makeCell() {
+  core::Cons_sp res = core::Cons_O::create(nil<core::T_O>(), nil<core::T_O>());
 #ifdef DEBUG_CC
-  printf("%s:%d precalcValue idx[%zu] value = %p\n", __FILE__, __LINE__, idx, (*array).data_element(idx).px);
+  printf("%s:%d makeCell res.px[%p]\n", __FILE__, __LINE__, res.px);
 #endif
-  T_O *res = array->data_element(idx).raw_();
-  return res;
+  return res.raw_();
 }
 
-ALWAYS_INLINE core::T_O **cc_loadTimeValueReference(core::LoadTimeValues_O **ltvPP, size_t index) {
-  ASSERT(ltvPP != NULL);
-  ASSERT(*ltvPP != NULL);
-  core::LoadTimeValues_O *tagged_ltvP = *ltvPP;
-  core::LoadTimeValues_O *ltvP = gctools::untag_general<core::LoadTimeValues_O *>(tagged_ltvP);
-  core::T_sp &result = ltvP->data_element(index);
-  return &result.rawRef_();
+ALWAYS_INLINE char* cc_getPointer(core::T_O* pointer_object) {
+  NO_UNWIND_BEGIN();
+  core::Pointer_O* po = reinterpret_cast<core::Pointer_O*>(gctools::untag_general(pointer_object));
+  char* ptr = reinterpret_cast<char*>(po->ptr());
+  return ptr;
+  NO_UNWIND_END();
+}
+};
+
+extern "C" {
+
+ALWAYS_INLINE core::T_O* cc_stack_enclose(void* closure_address, core::T_O* entryPointInfo, std::size_t numCells) {
+  NO_UNWIND_BEGIN();
+  ASSERT(((uintptr_t)(closure_address)&0x7) == 0); //
+  gctools::Header_s* header = reinterpret_cast<gctools::Header_s*>(closure_address);
+  const gctools::Header_s::BadgeStampWtagMtag closure_header = gctools::Header_s::BadgeStampWtagMtag::make<core::Closure_O>();
+//  gctools::global_stack_closure_bytes_allocated += size;
+#ifdef DEBUG_GUARD
+  size_t size = gctools::sizeof_container_with_header<core::Closure_O>(numCells);
+  new (header) gctools::GCHeader<core::Closure_O>::HeaderType(closure_header, size, 0, size);
+#else
+  new (header) gctools::GCHeader<core::Closure_O>::HeaderType(closure_header);
+#endif
+  core::T_sp tentryPoint((gctools::Tagged)entryPointInfo);
+  core::SimpleCoreFun_sp entryPoint = gc::As<SimpleCoreFun_sp>(tentryPoint);
+  auto obj = gctools::HeaderPtrToGeneralPtr<typename gctools::smart_ptr<core::Closure_O>::Type>(closure_address);
+  new (obj)(typename gctools::smart_ptr<core::Closure_O>::Type)(numCells, entryPoint);
+  gctools::smart_ptr<core::Closure_O> functoid = gctools::smart_ptr<core::Closure_O>(obj);
+  //  printf("%s:%d  Allocating closure on stack at %p  stack_closure_p()->%d\n", __FILE__, __LINE__, functoid.raw_(),
+  //  functoid->stack_closure_p());
+  return functoid.raw_();
+  NO_UNWIND_END();
+}
+};
+
+extern "C" {
+/* These functions are called by the runtime when the compiler wants to unbox
+ * things. Unlike the FLI translators below, they are not permissive, in that
+ * they will signal a type error if given anything but the particular type that's
+ * supposed to be unboxed.
+ * FIXME: Would be cleaner if we only had one set of translators, if they
+ * actually have the same requirements (I don't know if this is the case).
+ */
+
+float cc_unbox_single_float(core::T_O* box) {
+  T_sp tbox((gctools::Tagged)box);
+  return gc::As<SingleFloat_sp>(tbox).unsafe_single_float();
+}
+double cc_unbox_double_float(core::T_O* box) {
+  T_sp tbox((gctools::Tagged)box);
+  return gc::As<DoubleFloat_sp>(tbox)->get();
 }
 
-ALWAYS_INLINE core::T_O *cc_va_arg(VaList_S *valist) {
-  VaList_S *vl = reinterpret_cast<VaList_S *>(gc::untag_valist((void *)valist));
-  return va_arg(vl->_Args, core::T_O *);
+}; // extern "C"
+
+extern "C" {
+
+// ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// M K -FUNCTIONS
+// Helpers to create Lisp objects from C++ typed vars / values
+
+// These functions are part of the Foreign Language Interface and are
+// referenced from the FLI functions in fli.cc.
+
+ALWAYS_INLINE core::T_sp mk_fixnum_short(short v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_ushort(unsigned short v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_int(int v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_uint(unsigned int v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_int8(int8_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_uint8(uint8_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_int16(int16_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_uint16(uint16_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_int32(int32_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_fixnum_uint32(uint32_t v) { return core::make_fixnum(v); }
+
+ALWAYS_INLINE core::T_sp mk_integer_int64(int64_t v) { return core::Integer_O::create(v); }
+
+ALWAYS_INLINE core::T_sp mk_integer_uint64(uint64_t v) { return core::Integer_O::create(v); }
+
+ALWAYS_INLINE core::T_sp mk_integer_long(long v) { return core::Integer_O::create((Fixnum)v); }
+
+ALWAYS_INLINE core::T_sp mk_integer_ulong(unsigned long v) { return core::Integer_O::create(static_cast<Fixnum>(v)); }
+
+ALWAYS_INLINE core::T_sp mk_integer_longlong(long long v) { return core::Integer_O::create((long long)v); }
+
+ALWAYS_INLINE core::T_sp mk_integer_ulonglong(unsigned long long v) { return core::Integer_O::create((unsigned long long)v); }
+
+ALWAYS_INLINE core::T_sp mk_double_float(double v) { return core::DoubleFloat_O::create(v); }
+
+ALWAYS_INLINE core::T_sp mk_single_float(float v) { return core::make_single_float(v); }
+
+ALWAYS_INLINE core::T_sp mk_long_double(long double v) { return core::LongFloat_O::create(v); }
+
+ALWAYS_INLINE core::T_sp mk_time(time_t v) {
+  size_t size = sizeof(time_t);
+  auto self = gctools::GC<clasp_ffi::ForeignData_O>::allocate_with_default_constructor();
+  self->allocate(kw::_sym_clasp_foreign_data_kind_time, core::DeleteOnDtor, size);
+  memmove(self->raw_data(), &v, size);
+  return self;
 }
 
-ALWAYS_INLINE void cc_copy_va_list(size_t nargs, T_O **mvPtr, VaList_S *va_args) {
-  VaList_S *vl = reinterpret_cast<VaList_S *>(gc::untag_valist((void *)va_args));
-  for (int i = LCC_FIXED_ARGS; i < nargs; ++i) {
-    mvPtr[i] = va_arg(vl->_Args, core::T_O *);
+ALWAYS_INLINE core::T_sp mk_pointer(void* v) {
+  clasp_ffi::ForeignData_sp ptr = clasp_ffi::ForeignData_O::create(reinterpret_cast<uintptr_t>(v));
+  ptr->set_kind(kw::_sym_clasp_foreign_data_kind_pointer);
+  return ptr;
+}
+
+ALWAYS_INLINE core::T_sp mk_size(size_t v) { return core::Integer_O::create(static_cast<Fixnum>(v)); }
+
+ALWAYS_INLINE core::T_sp mk_ssize(ssize_t v) { return core::Integer_O::create(static_cast<Fixnum>(v)); }
+
+ALWAYS_INLINE core::T_sp mk_ptrdiff(ptrdiff_t v) { return core::Integer_O::create(static_cast<Fixnum>(v)); }
+
+ALWAYS_INLINE core::T_sp mk_char(char v) { return core::clasp_make_character(v); }
+
+// ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// T R A N S L A T O R S
+
+// These functions are part of the Foreign Language Interface and are
+// referenced from the FLI functions in fli.cc.
+
+// ----------------------------------------------------------------------------
+// FIXNUM
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE gctools::Fixnum from_object_fixnum(core::T_O* obj) {
+  gctools::Fixnum x = gctools::untag_fixnum<T_O*>(obj);
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_fixnum(gctools::Fixnum x) { return core::make_fixnum(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// SHORT
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE short from_object_short(core::T_O* obj) { return (short)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_short(short x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// UNSIGNED SHORT
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE unsigned short from_object_unsigned_short(core::T_O* obj) { return (unsigned short)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_unsigned_short(short x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// INT
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE int from_object_int(core::T_O* obj) { return (int)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_int(int x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// UNSIGNED INT
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE unsigned int from_object_unsigned_int(core::T_O* obj) { return (unsigned int)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_unsigned_int(unsigned int x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// LONG
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE long from_object_long(core::T_O* obj) {
+  long x = translate::make_from_object<long>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_long(long x) { return translate::to_object<long>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// UNSIGNED LONG
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE unsigned long from_object_unsigned_long(core::T_O* obj) {
+  unsigned long x = translate::make_from_object<unsigned long>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_unsigned_long(unsigned long x) { return translate::to_object<unsigned long>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// INT8
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE int8_t from_object_int8(core::T_O* obj) { return (int8_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_int8(int8_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// Uint8
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE uint8_t from_object_uint8(core::T_O* obj) { return (uint8_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_uint8(uint8_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// INT16
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE int16_t from_object_int16(core::T_O* obj) { return (int16_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_int16(int16_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// UINT16
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE uint16_t from_object_uint16(core::T_O* obj) { return (uint16_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_uint16(uint16_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// INT32
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE int32_t from_object_int32(core::T_O* obj) { return (int32_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_int32(int32_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// UINT32
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE uint32_t from_object_uint32(core::T_O* obj) { return (uint32_t)from_object_fixnum(obj); }
+
+ALWAYS_INLINE core::T_O* to_object_uint32(uint32_t x) { return to_object_fixnum((gctools::Fixnum)x); }
+
+// ----------------------------------------------------------------------------
+// INT64
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE int64_t from_object_int64(core::T_O* obj) {
+  int64_t x = translate::make_from_object<int64_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_int64(int64_t x) { return translate::to_object<int64_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// UINT64
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE uint64_t from_object_uint64(core::T_O* obj) {
+  uint64_t x = translate::make_from_object<uint64_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_uint64(uint64_t x) { return translate::to_object<uint64_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// LONG LONG
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE long long from_object_long_long(core::T_O* obj) {
+  core::T_sp tobj((gctools::Tagged)obj);
+  long long x = translate::make_from_object<long long>(tobj);
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_long_long(long long x) { return translate::to_object<long long>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// UNSIGNED LONG LONG
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE unsigned long long from_object_unsigned_long_long(core::T_O* obj) {
+  unsigned long long x = translate::make_from_object<long long>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_unsigned_long_long(unsigned long long x) {
+  return translate::to_object<unsigned long long>::convert(x).raw_();
+}
+
+// ----------------------------------------------------------------------------
+// SIZE_T
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE size_t from_object_size(core::T_O* obj) {
+  size_t x = translate::make_from_object<size_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_size(size_t x) { return translate::to_object<size_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// SSIZE_T
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE size_t from_object_ssize(core::T_O* obj) {
+  ssize_t x = translate::make_from_object<ssize_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_ssize(ssize_t x) { return translate::to_object<ssize_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// PTRDIFF_T
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE ptrdiff_t from_object_ptrdiff(core::T_O* obj) {
+  ptrdiff_t x = translate::make_from_object<ptrdiff_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_ptrdiff(ptrdiff_t x) { return translate::to_object<ptrdiff_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// TIME_T
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE time_t from_object_time(core::T_O* obj) {
+  time_t x = translate::make_from_object<time_t>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_time(time_t x) { return translate::to_object<time_t>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// CHAR
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE char from_object_char(core::T_O* obj) {
+  char x = translate::make_from_object<char>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_char(char x) { return translate::to_object<char>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// UNSIGNED CHAR
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE unsigned char from_object_unsigned_char(core::T_O* obj) {
+  unsigned char x = translate::make_from_object<unsigned char>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_unsigned_char(unsigned char x) { return translate::to_object<unsigned char>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// claspCharacter
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE claspCharacter from_object_claspCharacter(core::T_O* obj) {
+  return reinterpret_cast<claspCharacter>(gctools::untag_character<core::T_O*>(obj));
+}
+
+ALWAYS_INLINE core::T_O* to_object_claspCharacter(claspCharacter x) { return gctools::tag_character<core::T_O*>(x); }
+
+// ----------------------------------------------------------------------------
+// claspChar
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE claspChar from_object_claspChar(core::T_O* obj) {
+  return static_cast<claspChar>(gctools::untag_character<core::T_O*>(obj));
+}
+
+ALWAYS_INLINE core::T_O* to_object_claspChar(claspChar x) { return gctools::tag_character<core::T_O*>(x); }
+
+// ----------------------------------------------------------------------------
+// FLOAT
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE float from_object_float(core::T_O* obj) {
+  // Christian - Feb 12, 2017
+  //
+  // this is correct but it's not the absolute best solution.
+  // The best solution would be a converter from every type to
+  // float. As in:  from_single_float_to_float, from_double_float_to_float, from_fixnum_to_float
+  // and then have type checks in Common Lisp.
+  T_sp tobj((gctools::Tagged)obj);
+  if (gc::IsA<Number_sp>(tobj)) {
+    Number_sp nobj = gc::As_unsafe<Number_sp>(tobj);
+    float x = clasp_to_float(nobj);
+    return x;
   }
-  va_end(vl->_Args);
+  TYPE_ERROR(tobj, cl::_sym_Number_O);
 }
 
-ALWAYS_INLINE T_O *cc_unsafe_symbol_value(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  return symP->symbolValueRef().raw_();
+ALWAYS_INLINE core::T_O* to_object_float(float x) { return translate::to_object<float>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// DOUBLE
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE double from_object_double(core::T_O* obj) {
+  double x = translate::make_from_object<double>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
 }
 
-ALWAYS_INLINE T_O *cc_safe_symbol_value(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  T_O *sv = symP->symbolValueRef().raw_();
-  if (sv == gctools::global_tagged_Symbol_OP_unbound) {
-    intrinsic_error(llvmo::unboundSymbolValue, gc::smart_ptr<core::Symbol_O>((gc::Tagged)sym));
+ALWAYS_INLINE core::T_O* to_object_double(double x) { return translate::to_object<double>::convert(x).raw_(); }
+
+// ----------------------------------------------------------------------------
+// LONG DOUBLE
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE long double from_object_long_double(core::T_O* obj) {
+  long double x = translate::make_from_object<long double>(gctools::smart_ptr<core::T_O>((gctools::Tagged)obj));
+  return x;
+}
+
+ALWAYS_INLINE core::T_O* to_object_long_double(long double x) { return translate::to_object<long double>::convert(x).raw_(); }
+
+ALWAYS_INLINE core::T_O* to_object_void(void) { return nil<core::T_O>().raw_(); }
+
+// ----------------------------------------------------------------------------
+// POINTER
+// ----------------------------------------------------------------------------
+
+ALWAYS_INLINE void* from_object_pointer(core::T_O* obj) {
+  T_sp tobj((gctools::Tagged)obj);
+  if (gctools::IsA<clasp_ffi::ForeignData_sp>(tobj)) {
+    return gctools::As_unsafe<clasp_ffi::ForeignData_sp>(tobj)->ptr();
   }
-  return sv;
-}
-
-ALWAYS_INLINE T_O *cc_unsafe_fdefinition(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  return symP->_Function.raw_();
-}
-
-ALWAYS_INLINE T_O *cc_safe_fdefinition(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  T_O *sv = symP->_Function.raw_();
-  if (sv == gctools::global_tagged_Symbol_OP_unbound) {
-    intrinsic_error(llvmo::unboundSymbolFunction, gc::smart_ptr<core::Symbol_O>((gc::Tagged)sym));
+  if (gctools::IsA<core::Pointer_sp>(tobj)) {
+    return gctools::As_unsafe<core::Pointer_sp>(tobj)->ptr();
   }
-  return sv;
+  SIMPLE_ERROR("Handle from_object_pointer for value: {}", _rep_(tobj));
 }
 
-ALWAYS_INLINE T_O *cc_unsafe_setfdefinition(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  return symP->_SetfFunction.raw_();
+ALWAYS_INLINE core::T_O* to_object_pointer(void* x) { return clasp_ffi::ForeignData_O::create(x).raw_(); }
+
+// === END OF CORE TRANSLATORS ===
+
+}; // extern "C"
+
+////////////////////////////////////////////////////////////
+//
+// builtins.cc moved here.
+//
+
+#define TEMPLATE_READ_STAMP
+#include <clasp/llvmo/read-stamp.cc>
+#undef TEMPLATE_READ_STAMP
+
+extern "C" {
+uint64_t cx_read_stamp(core::T_O* obj, uint64_t stamp) {
+  uint64_t old_stamp = (uint64_t)llvmo::template_read_stamp<core::T_O>(obj);
+  cc_match((core::T_O*)old_stamp, (core::T_O*)stamp);
+  return old_stamp;
+}
+};
+
+extern "C" {
+
+gctools::ShiftedStamp cc_read_derivable_cxx_stamp_untagged_object(core::T_O* untagged_object) {
+  core::DerivableCxxObject_O* derivable_cxx_object_ptr = reinterpret_cast<core::DerivableCxxObject_O*>(untagged_object);
+  gctools::ShiftedStamp stamp = (gctools::ShiftedStamp)derivable_cxx_object_ptr->get_stamp_();
+  ASSERT(gctools::Header_s::BadgeStampWtagMtag::is_derivable_shifted_stamp(stamp));
+  //  printf("%s:%d:%s returning stamp %lu - check if it is correct\n", __FILE__, __LINE__, __FUNCTION__, stamp);
+  return stamp;
 }
 
-ALWAYS_INLINE T_O *cc_safe_setfdefinition(core::T_O *sym) {
-  core::Symbol_O *symP = reinterpret_cast<core::Symbol_O *>(gctools::untag_general<core::T_O *>(sym));
-  T_O *sv = symP->_SetfFunction.raw_();
-  if (sv == gctools::global_tagged_Symbol_OP_unbound) {
-    intrinsic_error(llvmo::unboundSymbolSetfFunction, gc::smart_ptr<core::Symbol_O>((gc::Tagged)sym));
+T_O* cc_match(T_O* old_value, T_O* new_value) {
+  if (new_value != NULL && old_value != new_value) {
+    printf("%s:%d There was a mismatch old value %p  new value %p\n", __FILE__, __LINE__, old_value, new_value);
   }
-  return sv;
+  return old_value;
+};
+
+#if 0
+void cc_rewind_vaslist(vaslist va_args, void** register_save_areaP)
+{
+  LCC_REWIND_VASLIST(va_args,register_save_areaP);
+}
+#endif
+
+size_t cc_checkBound(core::T_O* array, size_t bound, core::T_O* index) {
+  (void)array; // FIXME
+  core::T_sp tindex((gctools::Tagged)index);
+  if (tindex.fixnump()) {
+    core::Fixnum findex = tindex.unsafe_fixnum();
+    if ((0 <= findex) && (findex < bound))
+      return findex;
+    else {
+      // FIXME: use core::badIndexError instead
+      TYPE_ERROR(tindex, Cons_O::createList(cl::_sym_integer, core::make_fixnum(0), Cons_O::createList(core::make_fixnum(bound))));
+    }
+  } else
+    TYPE_ERROR(tindex, cl::_sym_fixnum);
 }
 
-ALWAYS_INLINE gc::return_type cc_call(LCC_ARGS_CC_CALL_ELLIPSIS) {
-  //	core::Function_O* func = gctools::DynamicCast<core::Function_O*,core::T_O*>::castOrNULL(tfunc);
-  core::Function_O *tagged_func = reinterpret_cast<core::Function_O *>(lcc_func);
-  auto closure = gc::untag_general<core::Function_O *>(tagged_func)->closure;
-  VaList_S lcc_arglist_s;
-  va_start(lcc_arglist_s._Args, LCC_VA_START_ARG);
-  LCC_SPILL_REGISTER_ARGUMENTS_TO_VA_LIST(lcc_arglist_s);
-  core::T_O *lcc_arglist = lcc_arglist_s.asTaggedPtr();
-  return closure->invoke_va_list(LCC_PASS_ARGS);
+unsigned char cc_simpleBitVectorAref(core::T_O* tarray, size_t index) {
+  core::SimpleBitVector_O* array = reinterpret_cast<core::SimpleBitVector_O*>(gctools::untag_general<core::T_O*>(tarray));
+  return (*array)[index];
 }
+
+void cc_simpleBitVectorAset(core::T_O* tarray, size_t index, unsigned char v) {
+  core::SimpleBitVector_O* array = reinterpret_cast<core::SimpleBitVector_O*>(gctools::untag_general<core::T_O*>(tarray));
+  (*array)[index] = v;
+}
+
+#if 0
+void cc_validate_tagged_pointer(core::T_O* ptr)
+{
+  unlikely_if ((((uintptr_t)ptr)&gctools::gc_tag)==gctools::gc_tag) {
+    uintptr_t testval = ((uintptr_t)ptr)&gctools::gc_tag;
+    uintptr_t gctag = gctools::gc_tag;
+    printf("%s:%d Invalid tagged pointer %p testval(%lu)==gctag(%lu)\n", __FILE__, __LINE__, ptr, testval,gctag );
+    abort();
+  }
+}
+#endif
 };
 
 namespace llvmo {
-void initialize_intrinsics() {
-  // Do nothing
-}
-};
+
+void initialize_raw_translators(void) {
+  // Nothing to do
+
+  return;
+
+} // initialize_raw_translators
+
+}; // namespace llvmo
+
 #pragma GCC visibility pop

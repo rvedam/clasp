@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: newhash.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -26,8 +27,6 @@ THE SOFTWARE.
 /* -^- */
 /* -*- mode: c; c-basic-offset: 8 -*- */
 
-#ifndef newhash_H
-#define newhash_H
 /********************
  * HASHING ROUTINES *
  ********************/
@@ -41,55 +40,53 @@ THE SOFTWARE.
  * 64 bit version
  */
 #define GOLDEN_RATIO 0x9e3779b97f4a7c13L
-#define mix(a, b, c)   \
-  {                    \
-    a = a - b;         \
-    a = a - c;         \
-    a = a ^ (c >> 43); \
-    b = b - c;         \
-    b = b - a;         \
-    b = b ^ (a << 9);  \
-    c = c - a;         \
-    c = c - b;         \
-    c = c ^ (b >> 8);  \
-    a = a - b;         \
-    a = a - c;         \
-    a = a ^ (c >> 38); \
-    b = b - c;         \
-    b = b - a;         \
-    b = b ^ (a << 23); \
-    c = c - a;         \
-    c = c - b;         \
-    c = c ^ (b >> 5);  \
-    a = a - b;         \
-    a = a - c;         \
-    a = a ^ (c >> 35); \
-    b = b - c;         \
-    b = b - a;         \
-    b = b ^ (a << 49); \
-    c = c - a;         \
-    c = c - b;         \
-    c = c ^ (b >> 11); \
-    a = a - b;         \
-    a = a - c;         \
-    a = a ^ (c >> 12); \
-    b = b - c;         \
-    b = b - a;         \
-    b = b ^ (a << 18); \
-    c = c - a;         \
-    c = c - b;         \
-    c = c ^ (b >> 22); \
+#define clasp_hash_mix(a, b, c)                                                                                                    \
+  {                                                                                                                                \
+    a = a - b;                                                                                                                     \
+    a = a - c;                                                                                                                     \
+    a = a ^ (c >> 43);                                                                                                             \
+    b = b - c;                                                                                                                     \
+    b = b - a;                                                                                                                     \
+    b = b ^ (a << 9);                                                                                                              \
+    c = c - a;                                                                                                                     \
+    c = c - b;                                                                                                                     \
+    c = c ^ (b >> 8);                                                                                                              \
+    a = a - b;                                                                                                                     \
+    a = a - c;                                                                                                                     \
+    a = a ^ (c >> 38);                                                                                                             \
+    b = b - c;                                                                                                                     \
+    b = b - a;                                                                                                                     \
+    b = b ^ (a << 23);                                                                                                             \
+    c = c - a;                                                                                                                     \
+    c = c - b;                                                                                                                     \
+    c = c ^ (b >> 5);                                                                                                              \
+    a = a - b;                                                                                                                     \
+    a = a - c;                                                                                                                     \
+    a = a ^ (c >> 35);                                                                                                             \
+    b = b - c;                                                                                                                     \
+    b = b - a;                                                                                                                     \
+    b = b ^ (a << 49);                                                                                                             \
+    c = c - a;                                                                                                                     \
+    c = c - b;                                                                                                                     \
+    c = c ^ (b >> 11);                                                                                                             \
+    a = a - b;                                                                                                                     \
+    a = a - c;                                                                                                                     \
+    a = a ^ (c >> 12);                                                                                                             \
+    b = b - c;                                                                                                                     \
+    b = b - a;                                                                                                                     \
+    b = b ^ (a << 18);                                                                                                             \
+    c = c - a;                                                                                                                     \
+    c = c - b;                                                                                                                     \
+    c = c ^ (b >> 22);                                                                                                             \
   }
 
-#define extract_word(k)                                                                      \
-  (k[0] + ((cl_intptr_t)k[1] << 8) + ((cl_intptr_t)k[2] << 16) + ((cl_intptr_t)k[3] << 24) + \
-   ((cl_intptr_t)k[4] << 32) + ((cl_intptr_t)k[5] << 40) + ((cl_intptr_t)k[6] << 48) +       \
-   ((cl_intptr_t)k[7] << 52))
+#define extract_word(k)                                                                                                            \
+  (k[0] + ((uintptr_t)k[1] << 8) + ((uintptr_t)k[2] << 16) + ((uintptr_t)k[3] << 24) + ((uintptr_t)k[4] << 32) +                   \
+   ((uintptr_t)k[5] << 40) + ((uintptr_t)k[6] << 48) + ((uintptr_t)k[7] << 52))
 
-inline cl_intptr_t
-hash_string(int initval, const unsigned char *k, int length) {
-  register cl_intptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, c = initval;
-  register int len;
+inline uintptr_t hash_string(int initval, const unsigned char* k, int length) {
+  uintptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, c = initval;
+  int len;
   for (len = length; len >= 24; len -= 24) {
     a += extract_word(k);
     k += 8;
@@ -97,7 +94,7 @@ hash_string(int initval, const unsigned char *k, int length) {
     k += 8;
     c += extract_word(k);
     k += 8;
-    mix(a, b, c);
+    clasp_hash_mix(a, b, c);
   }
 
   /*------------------------------------- handle the last 11 bytes */
@@ -105,55 +102,55 @@ hash_string(int initval, const unsigned char *k, int length) {
   switch (len) {
   /* all the case statements fall through */
   case 23:
-    c += ((cl_intptr_t)k[22] << 52);
+    c += ((uintptr_t)k[22] << 52);
   case 22:
-    c += ((cl_intptr_t)k[21] << 48);
+    c += ((uintptr_t)k[21] << 48);
   case 21:
-    c += ((cl_intptr_t)k[20] << 40);
+    c += ((uintptr_t)k[20] << 40);
   case 20:
-    c += ((cl_intptr_t)k[19] << 32);
+    c += ((uintptr_t)k[19] << 32);
   case 19:
-    c += ((cl_intptr_t)k[18] << 24);
+    c += ((uintptr_t)k[18] << 24);
   case 18:
-    c += ((cl_intptr_t)k[17] << 16);
+    c += ((uintptr_t)k[17] << 16);
   case 17:
-    c += ((cl_intptr_t)k[16] << 8);
+    c += ((uintptr_t)k[16] << 8);
   /* the first byte of c is reserved for the length */
   case 16:
-    b += ((cl_intptr_t)k[15] << 52);
+    b += ((uintptr_t)k[15] << 52);
   case 15:
-    b += ((cl_intptr_t)k[14] << 48);
+    b += ((uintptr_t)k[14] << 48);
   case 14:
-    b += ((cl_intptr_t)k[13] << 40);
+    b += ((uintptr_t)k[13] << 40);
   case 13:
-    b += ((cl_intptr_t)k[12] << 32);
+    b += ((uintptr_t)k[12] << 32);
   case 12:
-    b += ((cl_intptr_t)k[11] << 24);
+    b += ((uintptr_t)k[11] << 24);
   case 11:
-    b += ((cl_intptr_t)k[10] << 16);
+    b += ((uintptr_t)k[10] << 16);
   case 10:
-    b += ((cl_intptr_t)k[9] << 8);
+    b += ((uintptr_t)k[9] << 8);
   case 9:
     b += k[8];
   case 8:
-    a += ((cl_intptr_t)k[7] << 52);
+    a += ((uintptr_t)k[7] << 52);
   case 7:
-    a += ((cl_intptr_t)k[6] << 48);
+    a += ((uintptr_t)k[6] << 48);
   case 6:
-    a += ((cl_intptr_t)k[5] << 40);
+    a += ((uintptr_t)k[5] << 40);
   case 5:
-    a += ((cl_intptr_t)k[4] << 32);
+    a += ((uintptr_t)k[4] << 32);
   case 4:
-    a += ((cl_intptr_t)k[3] << 24);
+    a += ((uintptr_t)k[3] << 24);
   case 3:
-    a += ((cl_intptr_t)k[2] << 16);
+    a += ((uintptr_t)k[2] << 16);
   case 2:
-    a += ((cl_intptr_t)k[1] << 8);
+    a += ((uintptr_t)k[1] << 8);
   case 1:
     a += k[0];
     /* case 0: nothing left to add */
   }
-  mix(a, b, c);
+  clasp_hash_mix(a, b, c);
   /*-------------------------------------------- report the result */
   return c;
 }
@@ -164,43 +161,41 @@ hash_string(int initval, const unsigned char *k, int length) {
  */
 
 #define GOLDEN_RATIO 0x9e3779b9L
-#define mix(a, b, c) \
-  {                  \
-    a -= b;          \
-    a -= c;          \
-    a ^= (c >> 13);  \
-    b -= c;          \
-    b -= a;          \
-    b ^= (a << 8);   \
-    c -= a;          \
-    c -= b;          \
-    c ^= (b >> 13);  \
-    a -= b;          \
-    a -= c;          \
-    a ^= (c >> 12);  \
-    b -= c;          \
-    b -= a;          \
-    b ^= (a << 16);  \
-    c -= a;          \
-    c -= b;          \
-    c ^= (b >> 5);   \
-    a -= b;          \
-    a -= c;          \
-    a ^= (c >> 3);   \
-    b -= c;          \
-    b -= a;          \
-    b ^= (a << 10);  \
-    c -= a;          \
-    c -= b;          \
-    c ^= (b >> 15);  \
+#define clasp_hash_mix(a, b, c)                                                                                                    \
+  {                                                                                                                                \
+    a -= b;                                                                                                                        \
+    a -= c;                                                                                                                        \
+    a ^= (c >> 13);                                                                                                                \
+    b -= c;                                                                                                                        \
+    b -= a;                                                                                                                        \
+    b ^= (a << 8);                                                                                                                 \
+    c -= a;                                                                                                                        \
+    c -= b;                                                                                                                        \
+    c ^= (b >> 13);                                                                                                                \
+    a -= b;                                                                                                                        \
+    a -= c;                                                                                                                        \
+    a ^= (c >> 12);                                                                                                                \
+    b -= c;                                                                                                                        \
+    b -= a;                                                                                                                        \
+    b ^= (a << 16);                                                                                                                \
+    c -= a;                                                                                                                        \
+    c -= b;                                                                                                                        \
+    c ^= (b >> 5);                                                                                                                 \
+    a -= b;                                                                                                                        \
+    a -= c;                                                                                                                        \
+    a ^= (c >> 3);                                                                                                                 \
+    b -= c;                                                                                                                        \
+    b -= a;                                                                                                                        \
+    b ^= (a << 10);                                                                                                                \
+    c -= a;                                                                                                                        \
+    c -= b;                                                                                                                        \
+    c ^= (b >> 15);                                                                                                                \
   }
-#define extract_word(k) \
-  (k[0] + ((cl_intptr_t)k[1] << 8) + ((cl_intptr_t)k[2] << 16) + ((cl_intptr_t)k[3] << 24))
+#define extract_word(k) (k[0] + ((uintptr_t)k[1] << 8) + ((uintptr_t)k[2] << 16) + ((uintptr_t)k[3] << 24))
 
-inline cl_intptr_t
-hash_string(int initval, const unsigned char *k, int length) {
-  register cl_intptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, c = initval;
-  register int len;
+inline uintptr_t hash_string(int initval, const unsigned char* k, int length) {
+  uintptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, c = initval;
+  int len;
   for (len = length; len >= 12; len -= 12) {
     a += extract_word(k);
     k += 4;
@@ -208,7 +203,7 @@ hash_string(int initval, const unsigned char *k, int length) {
     k += 4;
     c += extract_word(k);
     k += 4;
-    mix(a, b, c);
+    clasp_hash_mix(a, b, c);
   }
 
   /*------------------------------------- handle the last 11 bytes */
@@ -216,44 +211,44 @@ hash_string(int initval, const unsigned char *k, int length) {
   switch (len) {
   /* all the case statements fall through */
   case 11:
-    c += ((cl_intptr_t)k[10] << 24);
+    c += ((uintptr_t)k[10] << 24);
   case 10:
-    c += ((cl_intptr_t)k[9] << 16);
+    c += ((uintptr_t)k[9] << 16);
   case 9:
-    c += ((cl_intptr_t)k[8] << 8);
+    c += ((uintptr_t)k[8] << 8);
   /* the first byte of c is reserved for the length */
   case 8:
-    b += ((cl_intptr_t)k[7] << 24);
+    b += ((uintptr_t)k[7] << 24);
   case 7:
-    b += ((cl_intptr_t)k[6] << 16);
+    b += ((uintptr_t)k[6] << 16);
   case 6:
-    b += ((cl_intptr_t)k[5] << 8);
+    b += ((uintptr_t)k[5] << 8);
   case 5:
     b += k[4];
   case 4:
-    a += ((cl_intptr_t)k[3] << 24);
+    a += ((uintptr_t)k[3] << 24);
   case 3:
-    a += ((cl_intptr_t)k[2] << 16);
+    a += ((uintptr_t)k[2] << 16);
   case 2:
-    a += ((cl_intptr_t)k[1] << 8);
+    a += ((uintptr_t)k[1] << 8);
   case 1:
     a += k[0];
     /* case 0: nothing left to add */
   }
-  mix(a, b, c);
+  clasp_hash_mix(a, b, c);
   /*-------------------------------------------- report the result */
   return c;
 }
 #endif
 
-inline cl_intptr_t hash_word(cl_intptr_t c, cl_intptr_t w) {
-  cl_intptr_t a = w + GOLDEN_RATIO, b = GOLDEN_RATIO;
-  mix(a, b, c);
+inline uintptr_t hash_word(uintptr_t c, uintptr_t w) {
+  uintptr_t a = w + GOLDEN_RATIO, b = GOLDEN_RATIO;
+  clasp_hash_mix(a, b, c);
   return c;
 }
-
-inline cl_intptr_t hash_base_string(const char *s, int len, cl_intptr_t h) {
-  cl_intptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, i;
+#if 0
+inline uintptr_t hash_base_string(const char *s, int len, uintptr_t h) {
+  uintptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, i;
   for (i = len; i >= 3; i -= 3) {
     a += *s;
     s++;
@@ -261,7 +256,7 @@ inline cl_intptr_t hash_base_string(const char *s, int len, cl_intptr_t h) {
     s++;
     h += *s;
     s++;
-    mix(a, b, h);
+    clasp_hash_mix(a, b, h);
   }
   switch (i) {
   case 2:
@@ -272,13 +267,13 @@ inline cl_intptr_t hash_base_string(const char *s, int len, cl_intptr_t h) {
   default:
     h += len;
   }
-  mix(a, b, h);
+  clasp_hash_mix(a, b, h);
   return h;
 }
 
-#ifdef ECL_UNICODE
-static cl_intptr_t hash_full_string(const ecl_character *s, int len, int h) {
-  cl_intptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, i;
+#ifdef CLASP_UNICODE
+static uintptr_t hash_full_string(const claspCharacter *s, int len, int h) {
+  uintptr_t a = GOLDEN_RATIO, b = GOLDEN_RATIO, i;
   for (i = len; i >= 3; i -= 3) {
     a += (*s);
     s++;
@@ -301,4 +296,4 @@ static cl_intptr_t hash_full_string(const ecl_character *s, int len, int h) {
   return h;
 }
 #endif
-#endif
+#endif // #if 0

@@ -1,131 +1,269 @@
 (in-package :clasp-cleavir)
 
+;;; FIXME: Move this earlier
+;; changed by de/proclaim
+(defvar *ftypes* (make-hash-table :test #'equal))
 
+(defun global-ftype (name)
+  (multiple-value-bind (value presentp) (gethash name *ftypes*)
+    (if presentp
+        value
+        (load-time-value (cleavir-ctype:function-top *clasp-system*)))))
 
-(defvar *current-function-entry-basic-block*)
+(defun (setf global-ftype) (type name)
+  (setf (gethash name *ftypes*)
+        (env:parse-type-specifier type *clasp-env* *clasp-system*)))
 
-(defmethod cleavir-generate-ast:convert-constant-to-immediate ((n integer) environment clasp)
-  ;; convert fixnum into immediate but bignums return nil
-  (core:create-tagged-immediate-value-or-nil n))
+(defvar *vtypes* (make-hash-table :test #'eq))
+(defun global-type (name)
+  (multiple-value-bind (value presentp) (gethash name *vtypes*)
+    (if presentp
+        value
+        (load-time-value (cleavir-ctype:top *clasp-system*)))))
+(defun (setf global-type) (type name)
+  (setf (gethash name *vtypes*)
+        (env:parse-type-specifier type *clasp-env* *clasp-system*)))
 
-(defmethod cleavir-generate-ast:convert-constant-to-immediate ((n character) environment clasp)
-  ;; convert character to an immediate
-  (core:create-tagged-immediate-value-or-nil n))
-
-(defmethod cleavir-generate-ast:convert-constant-to-immediate ((n float) environment clasp)
-  ;; single-float's can be converted to immediates, anything else will return nil
-  (core:create-tagged-immediate-value-or-nil n))
-
-(defmethod cleavir-env:variable-info ((environment clasp-global-environment) symbol)
-  (core:stack-monitor)
+(defmethod env:variable-info ((system clasp)
+                              (environment clasp-global-environment) symbol)
   (cond (;; We can check whether this symbol names a constant variable
 	 ;; by checking the return value of CONSTANTP. 
 	 (constantp symbol)
 	 ;; If it is a constant variable, we can get its value by
 	 ;; calling SYMBOL-VALUE on it.
-	 (make-instance 'cleavir-env:constant-variable-info
+	 (make-instance 'env:constant-variable-info
 	   :name symbol
 	   :value (symbol-value symbol)))
-	(;; If it is not a constant variable, we can check whether
-	 ;; macroexpanding it alters it.
-	 (not (eq symbol (macroexpand-1 symbol)))
-	 ;; Clearly, the symbol is defined as a symbol macro.
-	 (make-instance 'cleavir-env:symbol-macro-info
+        (;; Use Clasp's core:specialp test to determine if it is special.
+         ;; Note that in Clasp constants are also special (FIXME?) so we
+         ;; have to do this test after checking for constantness.
+         (ext:specialp symbol)
+	 (make-instance 'env:special-variable-info
+           :name symbol
+           :global-p t
+           :type (global-type symbol)))
+	(;; Maybe it's a symbol macro.
+	 (ext:symbol-macro symbol)
+	 (make-instance 'env:symbol-macro-info
 	   :name symbol
-	   :expansion (macroexpand-1 symbol)))
-	(;; If it is neither a constant variable nor a symbol macro,
-	 ;; it might be a special variable.  We can start by checking
-	 ;; whether it is bound.
-	 (boundp symbol)
-	 ;; In that case, it is definitely special.
-	 (make-instance 'cleavir-env:special-variable-info
-	   :name symbol))
-        (;; If it is not bound, it could still be special.
-         ;; Use Clasp's core:specialp test to determine if it is special.
-         ;; If so, assume that it is of type T
-         (core:specialp symbol)
-	 ;; It is a special variable.  However, we don't know its
-	 ;; type, so we assume it is T, which is the default.
-	 (make-instance 'cleavir-env:special-variable-info
-	   :name symbol))
-        #+(or)(;; If it is not bound, it could still be special.  If so, it
-         ;; might have a restricted type on it.  It will then likely
-         ;; fail to bind it to an object of some type that we
-         ;; introduced, say our bogus environment.  It is not fool
-         ;; proof because it could have the type STANDARD-OBJECT.  But
-         ;; in the worst case, we will just fail to recognize it as a
-         ;; special variable.
-         (null (ignore-errors
-                 (eval `(let ((,symbol (make-instance 'clasp-global-environment)))
-                          t))))
-	 ;; It is a special variable.  However, we don't know its
-	 ;; type, so we assume it is T, which is the default.
-	 (make-instance 'cleavir-env:special-variable-info
-	   :name symbol))
-	#+(or)( ;; If the previous test fails, it could still be special
-               ;; without any type restriction on it.  We can try to
-               ;; determine whether this is the case by checking whether the
-               ;; ordinary binding (using LET) of it is the same as the
-               ;; dynamic binding of it.  This method might fail because the
-               ;; type of the variable may be restricted to something we
-               ;; don't know and that we didn't catch before, 
-               (ignore-errors
-                 (eval `(let ((,symbol 'a))
-                          (progv '(,symbol) '(b) (eq ,symbol (symbol-value ',symbol))))))
-               ;; It is a special variable.  However, we don't know its
-               ;; type, so we assume it is T, which is the default.
-               (make-instance 'cleavir-env:special-variable-info
-                              :name symbol))
+	   :expansion (macroexpand-1 symbol)
+           :type (global-type symbol)))
 	(;; Otherwise, this symbol does not have any variable
 	 ;; information associated with it.
 	 t
 	 ;; Return NIL as the protocol stipulates.
 	 nil)))
 
-(defmethod cleavir-env:variable-info ((environment null) symbol)
-  (cleavir-env:variable-info *clasp-env* symbol))
+(defmethod env:variable-info ((system clasp) (environment null) symbol)
+  (env:variable-info system *clasp-env* symbol))
+
+(defmethod env:variable-info ((system clasp) (environment cmp:lexenv) symbol)
+  ;; This whole structure is getting redundant wrt cleavir-env.
+  ;; TODO: Move to trucler, forget cleavir environments.
+  ;; (But Trucler still has its own info structures, I think, so maybe not?)
+  ;; Also TODO: Types etc.?
+  (let ((info (cmp:var-info symbol environment)))
+    (etypecase info
+      (null
+       ;; Not locally bound: Check the global environment.
+       (env:variable-info system *clasp-env* symbol))
+      (cmp:lexical-var-info
+       ;; This will probably not go well - cleavir expects an identity, etc.
+       (make-instance 'env:lexical-variable-info :name symbol))
+      (cmp:special-var-info
+       (make-instance 'env:special-variable-info :name symbol :global-p nil))
+      (cmp:symbol-macro-var-info
+       (make-instance 'env:symbol-macro-info
+         :name symbol
+         :expansion (funcall (cmp:symbol-macro-var-info/expander info)
+                             symbol environment)))
+      (cmp:constant-var-info
+       (make-instance 'env:constant-variable-info
+         :name symbol :value (ext:constant-form-value symbol environment))))))
+
+(defvar *fn-flags* (make-hash-table :test #'equal))
+(defvar *fn-transforms* (make-hash-table :test #'equal))
+(defvar *derivers* (make-hash-table :test #'equal))
+(defvar *folds* (make-hash-table :test #'equal))
+
+(macrolet ((define-function-flags (name &rest attributes)
+             `(setf (gethash ',name *fn-flags*)
+                    (cleavir-attributes:make-flags ,@attributes))))
+  ;; FIXME: Can't do DX-call for many things like APPLY, FUNCALL, etc.
+  ;; because we don't distinguish between *which* functional argument
+  ;; is DX.
+  (define-function-flags apply :dyn-call)
+  (define-function-flags funcall :dyn-call)
+  (define-function-flags every :dyn-call :dx-call)
+  (define-function-flags some :dyn-call :dx-call)
+  (define-function-flags notevery :dyn-call :dx-call)
+  (define-function-flags notany :dyn-call :dx-call)
+  (define-function-flags sublis :dyn-call :dx-call)
+  (define-function-flags nsublis :dyn-call :dx-call)
+  (define-function-flags subst-if :dyn-call :dx-call)
+  (define-function-flags subst-if-not :dyn-call :dx-call)
+  (define-function-flags nsubst-if :dyn-call :dx-call)
+  (define-function-flags nsubst-if-not :dyn-call :dx-call)
+  (define-function-flags member :dyn-call :dx-call)
+  (define-function-flags member-if :dyn-call :dx-call)
+  (define-function-flags member-if-not :dyn-call :dx-call)
+  (define-function-flags mapc :dyn-call :dx-call)
+  (define-function-flags mapcar :dyn-call :dx-call)
+  (define-function-flags mapcan :dyn-call :dx-call)
+  (define-function-flags mapl :dyn-call :dx-call)
+  (define-function-flags maplist :dyn-call :dx-call)
+  (define-function-flags mapcon :dyn-call :dx-call)
+  (define-function-flags assoc :dyn-call :dx-call)
+  (define-function-flags assoc-if :dyn-call :dx-call)
+  (define-function-flags assoc-if-not :dyn-call :dx-call)
+  (define-function-flags rassoc :dyn-call :dx-call)
+  (define-function-flags rassoc-if :dyn-call :dx-call)
+  (define-function-flags rassoc-if-not :dyn-call :dx-call)
+  (define-function-flags intersection :dyn-call :dx-call)
+  (define-function-flags nintersection :dyn-call :dx-call)
+  (define-function-flags adjoin :dyn-call :dx-call)
+  (define-function-flags set-difference :dyn-call :dx-call)
+  (define-function-flags nset-difference :dyn-call :dx-call)
+  (define-function-flags set-exclusive-or :dyn-call :dx-call)
+  (define-function-flags nset-exclusive-or :dyn-call :dx-call)
+  (define-function-flags subsetp :dyn-call :dx-call)
+  (define-function-flags union :dyn-call :dx-call)
+  (define-function-flags nunion :dyn-call :dx-call)
+  (define-function-flags map :dyn-call :dx-call)
+  (define-function-flags map-into :dyn-call :dx-call)
+  (define-function-flags merge :dyn-call :dx-call)
+  (define-function-flags ast:map-ast-depth-first-preorder :dyn-call
+    :dx-call)
+  (define-function-flags bir:map-iblocks :dyn-call :dx-call)
+  (define-function-flags bir:map-iblock-instructions :dyn-call :dx-call)
+  ;; Can't do DYN-CALL for most sequence functions, as ext sequence
+  ;; functions can do arbitrary things.
+  (define-function-flags core:progv-function :dx-call)
+  (define-function-flags core:funwind-protect :dx-call)
+  (define-function-flags maphash :dx-call)
+  (define-function-flags remove :dx-call)
+  (define-function-flags remove-if :dx-call)
+  (define-function-flags remove-if-not :dx-call)
+  (define-function-flags delete :dx-call)
+  (define-function-flags delete-if :dx-call)
+  (define-function-flags delete-if-not :dx-call)
+  (define-function-flags reduce :dx-call)
+  (define-function-flags remove-duplicates :dx-call)
+  (define-function-flags delete-duplicates :dx-call)
+  (define-function-flags substitute :dx-call)
+  (define-function-flags substitute-if :dx-call)
+  (define-function-flags substitute-if-not :dx-call)
+  (define-function-flags nsubstitute :dx-call)
+  (define-function-flags nsubstitute-if :dx-call)
+  (define-function-flags nsubstitute-if-not :dx-call)
+  (define-function-flags count :dx-call)
+  (define-function-flags count-if :dx-call)
+  (define-function-flags count-if-not :dx-call)
+  (define-function-flags find :dx-call)
+  (define-function-flags find-if :dx-call)
+  (define-function-flags find-if-not :dx-call)
+  (define-function-flags position :dx-call)
+  (define-function-flags position-if :dx-call)
+  (define-function-flags position-if-not :dx-call)
+  (define-function-flags mismatch :dx-call)
+  (define-function-flags search :dx-call)
+  (define-function-flags sort :dx-call)
+  (define-function-flags stable-sort :dx-call)
+
+  (define-function-flags core::map-into-sequence :dyn-call :dx-call)
+  (define-function-flags core::map-into-sequence/1 :dyn-call :dx-call)
+  (define-function-flags core::map-for-effect :dyn-call :dx-call)
+  (define-function-flags core::map-for-effect/1 :dyn-call :dx-call)
+  (define-function-flags core::map-to-list :dyn-call :dx-call)
+  (define-function-flags core::map-to-list/1 :dyn-call :dx-call)
+  (define-function-flags core::every/1 :dyn-call :dx-call)
+  (define-function-flags core::some/1 :dyn-call :dx-call))
 
 (defun treat-as-special-operator-p (name)
   (cond
-    ((cmp:treat-as-special-operator-p name) t)
+    ;; These are CL special operators (special-operator-p) but handled
+    ;; with macros.
+    ((member name '(catch throw progv)) nil)
+    ((special-operator-p name) t)
+    ((eq name 'core:multiple-value-foreign-call) t) ;; Call intrinsic functions
+    ((eq name 'core:foreign-call-pointer) t) ;; Call function pointers
+    ((eq name 'core::primop) t)
     ((eq (symbol-package name) (find-package :cleavir-primop)) t)
     (t nil)))
 
+;;; Store inline ASTs in the environment, keyed to their name.
+;;; FIXME: Fix sysprops for setf names
+(defun inline-ast (name)
+  (core:get-sysprop name 'inline-ast))
+(defun (setf inline-ast) (ast name)
+  (setf (core:get-sysprop name 'inline-ast) ast))
 
+;;; So that we can dump ASTs (for DEFUNs with an inline expansion)
+(defmethod make-load-form ((ast cleavir-ast:ast) &optional environment)
+  (declare (ignore environment))
+  (values `(allocate-instance ,(class-of ast))
+          `(initialize-instance
+            ,ast
+            ,@(loop for (keyword reader)
+                      in (cleavir-io:save-info ast)
+                    for value = (funcall reader ast)
+                    collect `(quote ,keyword)
+                    collect `(quote ,value)))))
 
-(defmethod cleavir-env:function-info ((environment clasp-global-environment) function-name)
+(defmethod make-load-form ((cst cst:cst) &optional environment)
+  (make-load-form-saving-slots cst :environment environment))
+
+(defun function-attributes (function-name)
+  (let* ((flags (gethash function-name *fn-flags*))
+         (transforms (gethash function-name *fn-transforms*))
+         (derivers (gethash function-name *derivers*))
+         (folds (gethash function-name *folds*))
+         (vaslistablep (cc-vaslist:vaslistablep function-name)))
+    (if (or flags transforms folds derivers)
+        (make-instance 'cleavir-attributes:attributes
+          :flags (or flags (cleavir-attributes:make-flags))
+          :identities (if (or transforms folds
+                              derivers vaslistablep)
+                          (list function-name)
+                          nil))
+        (cleavir-attributes:default-attributes))))
+
+(defmethod env:function-info ((sys clasp)
+                              (environment clasp-global-environment)
+                              function-name)
   (cond
-    ( ;; If it is not the name of a macro, it might be the name of
-     ;; a special operator.  This can be checked by calling
-     ;; special-operator-p.
-     (and (symbolp function-name) (treat-as-special-operator-p function-name))
-     (make-instance 'cleavir-env:special-operator-info
-		    :name function-name))
-    ( ;; If the function name is the name of a macro, then
-     ;; MACRO-FUNCTION returns something other than NIL.
-     (and (symbolp function-name) (not (null (macro-function function-name))))
-     ;; If so, we know it is a global macro.  It is also safe to
-     ;; call COMPILER-MACRO-FUNCTION, because it returns NIL if
-     ;; there is no compiler macro associated with this function
-     ;; name.
-     (make-instance 'cleavir-env:global-macro-info
-		    :name function-name
-		    :expander (macro-function function-name)
-		    :compiler-macro (compiler-macro-function function-name)))
-    ( ;; If it is neither the name of a macro nor the name of a
-     ;; special operator, it might be the name of a global
-     ;; function.  We can check this by calling FBOUNDP.  Now,
-     ;; FBOUNDP returns true if it is the name of a macro or a
-     ;; special operator as well, but we have already checked for
-     ;; those cases.
-     (fboundp function-name)
-     ;; In that case, we return the relevant info
-     ;; Check if we should inline the function
-     (make-instance 'cleavir-env:global-function-info
-                    :name function-name
-                    :compiler-macro (compiler-macro-function function-name)
-                    :inline (core:global-inline-status function-name)
-                    :ast (core:cleavir-ast (fdefinition function-name))))
+    ((and (symbolp function-name) (treat-as-special-operator-p function-name))
+     (make-instance 'env:special-operator-info
+       :name function-name))
+    ;; If the function name is the name of a macro, then
+    ;; MACRO-FUNCTION returns something other than NIL.
+    ((and (symbolp function-name) (not (null (macro-function function-name))))
+     (make-instance 'env:global-macro-info ; we're global, so the macro must be global.
+       :name function-name
+       :inline (core:global-inline-status function-name)
+       :expander (macro-function function-name)
+       :compiler-macro (compiler-macro-function function-name)))
+    ((fboundp function-name)
+     (let* ((cleavir-ast (inline-ast function-name))
+            (inline-status (core:global-inline-status function-name))
+            (attributes (function-attributes function-name)))
+       (make-instance 'env:global-function-info
+         :name function-name
+         :type (global-ftype function-name)
+         :compiler-macro (compiler-macro-function function-name)
+         :inline inline-status
+         :ast cleavir-ast
+         :attributes attributes)))
+    ;; A top-level defun for the function has been seen.
+    ;; The expansion calls cmp::register-global-function-def at compile time,
+    ;; which is hooked up so that among other things this works.
+    ((cmp:known-function-p function-name)
+     (make-instance 'env:global-function-info
+       :name function-name
+       :type (global-ftype function-name)
+       :compiler-macro (compiler-macro-function function-name)
+       :inline (core:global-inline-status function-name)
+       :ast (inline-ast function-name)))
     ( ;; If it is neither of the cases above, then this name does
      ;; not have any function-info associated with it.
      t
@@ -133,31 +271,61 @@
      nil)))
 
 ;;; The toplevel shell may have a bclasp environment - ignore it
-(defmethod cleavir-env:symbol-macro-expansion (symbol (environment core:value-frame))
-  (cleavir-environment:symbol-macro-expansion symbol *clasp-env*))
+(defmethod env:function-info ((sys clasp) (environment null) symbol)
+  (env:function-info sys *clasp-env* symbol))
 
-(defmethod cleavir-env:function-info ((environment null) symbol)
-  (cleavir-env:function-info *clasp-env* symbol))
+(defmethod env:function-info ((sys clasp) (environment cmp:lexenv) symbol)
+  (if (and (symbolp symbol) (treat-as-special-operator-p symbol))
+      ;; The bytecode compiler doesn't know about special operators.
+      ;; (It might need to learn for Trucler, later.)
+      (make-instance 'env:special-operator-info :name symbol)
+      (let ((info (cmp:fun-info symbol environment)))
+        (etypecase info
+          (null (env:function-info sys *clasp-env* symbol)) ; check global
+          (cmp:global-fun-info
+           (make-instance 'env:global-function-info
+             :name symbol
+             :compiler-macro (cmp:global-fun-info/cmexpander info)))
+          (cmp:local-fun-info
+           ;; As with lexical variables, this may not end well
+           ;; as there will be no identity or anything.
+           (make-instance 'env:local-function-info :name symbol))
+          (cmp:global-macro-info
+           (make-instance 'env:global-macro-info
+             :name symbol :expander (cmp:global-macro-info/expander info)))
+          (cmp:local-macro-info
+           (make-instance 'env:local-macro-info
+             :name symbol :expander (cmp:local-macro-info/expander info)))))))
 
-(defmethod cleavir-env:function-info ((environment core:value-environment) symbol)
-  (cleavir-env:function-info (core:get-parent-environment environment) symbol))
+(defmethod env:declarations ((environment null))
+  (env:declarations *clasp-env*))
 
-(defmethod cleavir-env:function-info ((environment core:value-frame) symbol)
-  (cleavir-env:function-info (core:get-parent-environment environment) symbol))
+;;; TODO: Handle (declaim (declaration ...))
+(defmethod env:declarations
+    ((environment clasp-global-environment))
+  '(;; behavior as in convert-form.lisp
+    core:lambda-name core:lambda-list))
 
-(defmethod cleavir-env:variable-info ((environment core:value-frame) symbol)
-  (cleavir-env:variable-info (core:get-parent-environment environment) symbol))
+(defmethod env:declarations ((env cmp:lexenv)) (env:declarations *clasp-env*))
 
-(defmethod cleavir-env:variable-info ((environment core:value-environment) symbol)
-  (cleavir-env:variable-info (core:get-parent-environment environment) symbol))
+(eval-when (:compile-toplevel)
+  (format t "about to compute-policy~%"))
 
-(defmethod cleavir-env:optimize-info ((environment clasp-global-environment))
+(setf cmp:*policy*
+  '#.(policy:compute-policy cmp:*optimize* *clasp-env*))
+
+(defmethod env:optimize-info ((environment clasp-global-environment))
   ;; The default values are all 3.
-  (make-instance 'cleavir-env:optimize-info))
+  (make-instance 'env:optimize-info
+    :optimize cmp:*optimize*
+    :policy cmp:*policy*))
 
-(defmethod cleavir-env:optimize-info ((environment NULL))
-  ;; The default values are all 3.
-  (cleavir-env:optimize-info *clasp-env*))
+(defmethod env:optimize-info ((environment NULL))
+  (env:optimize-info *clasp-env*))
+
+(defmethod env:optimize-info ((env cmp:lexenv))
+  ;; FIXME: We will probably need lexenvs to track this eventually
+  (env:optimize-info *clasp-env*))
 
 
 (defmethod cleavir-environment:macro-function (symbol (environment clasp-global-environment))
@@ -177,237 +345,128 @@
 	   (cleavir-environment:macro-function symbol environment))
 	  (t (cleavir-environment:macro-function symbol *clasp-env*))))
 
-
 (defmethod cleavir-environment:symbol-macro-expansion (symbol (environment clasp-global-environment))
   (macroexpand symbol nil))
-
 
 (defmethod cleavir-environment:symbol-macro-expansion (symbol (environment NULL))
   (macroexpand symbol nil))
 
+;;; Used by ext:symbol-macro
+(defun core:cleavir-symbol-macro (symbol environment)
+  (let ((info (env:variable-info *clasp-system* environment symbol)))
+    (if (typep info 'env:symbol-macro-info)
+        (let ((expansion (env:expansion info)))
+          (lambda (form env)
+            (declare (ignore form env)
+                     (core:lambda-name cleavir-symbol-macro-function))
+            expansion))
+        nil)))
 
-(setq cl:*macroexpand-hook* (lambda (macro-function macro-form environment)
-			      (cond
-				((typep environment 'core:environment)
-				 (core:macroexpand-default macro-function macro-form environment))
-				((or (null environment) (typep environment 'clasp-global-environment))
-				 (core:macroexpand-default macro-function macro-form nil))
-				((typep environment 'cleavir-environment::entry)
-                                 (funcall macro-function macro-form environment))
-                                (t
-                                 (error "Add support to macroexpand of ~a using non-bclasp, non-top-level environment like: ~a" macro-form environment)))))
+;;; Used by core:operator-shadowed-p
+(defun core:cleavir-operator-shadowed-p (name environment)
+  (typep (env:function-info *clasp-system* environment name)
+         '(or env:local-function-info
+           env:local-macro-info)))
 
+(defun type-expand-1 (type-specifier &optional env)
+  (let (head)
+    (etypecase type-specifier
+      (class (return-from type-expand-1 (values type-specifier nil)))
+      (symbol (setf head type-specifier))
+      (cons (setf head (first type-specifier))))
+    (let ((def (ext:type-expander head)))
+      (if def
+          (values (funcall def type-specifier env) t)
+          (values type-specifier nil)))))
 
-(defmethod cleavir-environment:eval (form env (dispatch-env clasp-global-environment))
-  (cclasp-eval form env))
+(defmethod env:type-expand ((environment clasp-global-environment) type-specifier)
+  ;; BEWARE: bclasp is really bad at unwinding, and mvb creates a
+  ;; lambda, so we write this loop in a way that avoids RETURN. cclasp
+  ;; will contify this and produce more efficient code anyway.
+  (labels ((expand (type-specifier ever-expanded)
+             (multiple-value-bind (expansion expanded)
+                 (type-expand-1 type-specifier environment)
+               (if expanded
+                   (expand expansion t)
+                   (values type-specifier ever-expanded)))))
+    (expand type-specifier nil)))
+
+(defmethod env:type-expand ((environment null) type-specifier)
+  (env:type-expand clasp-cleavir:*clasp-env* type-specifier))
+
+;;; Needed because the default method ends up with classes,
+;;; and that causes bootstrapping issues.
+(defmethod env:find-class (name environment (system clasp) &optional errorp)
+  (declare (ignore environment errorp))
+  name)
+
+(defun cleavir-env->bytecode (env)
+  ;; Convert a cleavir ENTRY (or null) into an environment clasp's bytecode compiler
+  ;; can use. Only for compile time environments, so it's symbol macros, macros, and
+  ;; declarations. The bytecode compiler doesn't use any declarations besides
+  ;; SPECIAL and NOTINLINE.
+  (etypecase env
+    ((or clasp-global-environment null) (cmp:make-null-lexical-environment))
+    (env:special-variable
+     (cmp:add-specials (cleavir-env->bytecode (env::next env))
+                       (list (env:name env))))
+    (env:symbol-macro
+     (let ((next (cleavir-env->bytecode (env::next env))))
+       (cmp:lexenv/make
+        (acons (env:name env)
+               (cmp:symbol-macro-var-info/make (constantly (env:expansion env)))
+               (cmp:lexenv/vars next))
+        (cmp:lexenv/tags next) (cmp:lexenv/blocks next) (cmp:lexenv/funs next)
+        (cmp:lexenv/decls next) (cmp:lexenv/frame-end next))))
+    (env:macro
+     (let ((next (cleavir-env->bytecode (env::next env))))
+       (cmp:lexenv/make
+        (cmp:lexenv/vars next) (cmp:lexenv/tags next) (cmp:lexenv/blocks next)
+        (acons (env:name env) (cmp:local-macro-info/make (env:expander env))
+               (cmp:lexenv/funs next))
+        (cmp:lexenv/decls next) (cmp:lexenv/frame-end next))))
+    (env:inline
+     (let ((next (cleavir-env->bytecode (env::next env))))
+       (if (eq (env:inline env) 'cl:notinline)
+           (cmp:lexenv/make
+            (cmp:lexenv/vars next) (cmp:lexenv/tags next) (cmp:lexenv/blocks next)
+            (cmp:lexenv/funs next) (cons `(notinline ,(env:name env)) (cmp:lexenv/decls next))
+            (cmp:lexenv/frame-end next))
+           next)))
+    (env::entry (cleavir-env->bytecode (env::next env)))))
 
 (defmethod cleavir-environment:eval (form env (dispatch-env NULL))
   "Evaluate the form in Clasp's top level environment"
   (cleavir-environment:eval form env *clasp-env*))
 
-#+(or)
-(defmacro ext::lambda-block (name (&rest lambda-list) &body body &environment env)
-  `(lambda ,lambda-list (block ,(if (listp name) (second name) name) ,@body)))
+(defmethod cleavir-environment:eval (form env (dispatch-env clasp-global-environment))
+  (simple-eval form env
+               (lambda (form env)
+                 (let (;; disable cleavir compiler macros
+                       (cmp:*cleavir-compile-hook* nil))
+                   (funcall (cmp:bytecompile `(lambda () (progn ,form))
+                                             (cleavir-env->bytecode env)))))))
 
+(defun wrap-cst (cst)
+  (cst:quasiquote (cst:source cst)
+                  (lambda () (cst:unquote cst))))
 
-(defun build-and-draw-ast (filename code)
-  (let ((ast (cleavir-generate-ast:generate-ast code *clasp-env* *clasp-system*)))
-    (cleavir-ast-graphviz:draw-ast ast filename)
-    ast))
+(defmethod cleavir-environment:cst-eval (cst env (dispatch-env clasp-global-environment)
+                                         system)
+  (declare (ignore system))
+  (simple-eval-cst cst env
+                   (lambda (cst env)
+                     (let ((cmp:*cleavir-compile-hook* nil))
+                       (funcall
+                        (cmp:bytecompile
+                         `(lambda () (progn ,(cst:raw cst)))
+                         (cleavir-env->bytecode env)))))))
 
-(defun build-and-draw-hir (filename code)
-  (let* ((ast (cleavir-generate-ast:generate-ast code *clasp-env*))
-	 (hir (cleavir-ast-to-hir:compile-toplevel ast)))
-    (with-open-file (stream filename :direction :output)
-      (cleavir-ir-graphviz:draw-flowchart hir stream))))
+(defmethod cleavir-environment:cst-eval (cst env (dispatch-env null) system)
+  (cleavir-environment:cst-eval cst env *clasp-env* system))
 
-
-(defun draw-hir (&optional (hir *hir*) (filename #P"/tmp/hir.dot"))
-  (setq filename (pathname filename))
-  (with-open-file (stream filename :direction :output)
-    (cleavir-ir-graphviz:draw-flowchart hir stream))
-  (let* ((png-pn (make-pathname :type "png" :defaults filename)))
-    (ext:system (format nil "dot -Tpng -o~a ~a" (namestring png-pn) (namestring filename)))
-    (ext:system (format nil "open -n ~a" (namestring png-pn)))))
-
-(defun draw-mir (&optional (mir *mir*) (filename "/tmp/mir.dot"))
-  (with-open-file (stream filename :direction :output)
-    (cleavir-ir-graphviz:draw-flowchart mir stream))
-  (ext:system (format nil "dot -Teps -o/tmp/mir.eps ~a" filename))
-  (ext:system "open -n /tmp/mir.eps"))
-
-(defun draw-ast (&optional (ast *ast*) (filename "/tmp/ast.dot"))
-  (let* ((dot-pathname (pathname filename))
-	 (png-pathname (make-pathname :type "png" :defaults dot-pathname)))
-    (with-open-file (stream filename :direction :output)
-      (cleavir-ast-graphviz:draw-ast ast filename))
-    (ext:system (format nil "dot -Tpng -o~a ~a" (namestring png-pathname) (namestring dot-pathname)))
-    (ext:system (format nil "open -n ~a" (namestring png-pathname)))))
-
-(defparameter *code1* '(let ((x 1) (y 2)) (+ x y)))
-(defparameter *code2* '(let ((x 10)) (if (> x 5) 1 2)))
-#+(or)(defparameter *code3* 
-        '(defun cl:macro-function (symbol &optional (environment nil environment-p))
-          (cond
-            ((typep environment 'core:environment)
-             (core:macro-function symbol environment))
-            (environment
-             (cleavir-environment:macro-function symbol environment))
-            (t (cleavir-environment:macro-function symbol *clasp-env*)))))
-
-
-(defun generate-asts-for-clasp-source (start end)
-  (let* ((parts (core::select-source-files end :first-file start :system core:*init-files*))
-	 (pathnames (mapcar (lambda (part) (core:build-pathname part)) parts))
-	 (eof (gensym)))
-    (loop for file in pathnames
-	 do (with-open-file (stream file :direction :input)
-	      (loop for form = (read stream nil eof)
-		 until (eq form eof)
-		 do (format t "FORM: ~a~%" form)
-		 do (let ((ast (cleavir-generate-ast:generate-ast form *clasp-env*)))
-		      )
-	      )))))
-
-
-
-(defvar *hir-single-step* nil)
-(defun hir-single-step (&optional (on t))
-  (setq *hir-single-step* on))
-
-
-(define-condition continue-hir (condition) ())
-
-(defun do-continue-hir ()
-  (format t "Continuing processing forms~%")
-  (signal 'continue-hir))
-
-
-(defconstant *hir-commands*
-  '(("HIR commands"
-     ((:c :continue) do-continue-hir nil
-      ":c(ontinue) Continue processing forms"
-      "Stuff"))))
-
-(defun ast-form (form)
-  (let ((ast (cleavir-generate-ast:generate-ast form *clasp-env* *clasp-system*)))
-    (setf *form* form
-	  *ast* ast)
-    (draw-ast ast)
-    ast))
-
-(defun hoisted-ast-form (form)
-  (let* ((ast (cleavir-generate-ast:generate-ast form *clasp-env* *clasp-system*))
-	 (hoisted (clasp-cleavir-ast:hoist-load-time-value ast)))
-    (setf *form* form
-	  *ast* hoisted)
-    (draw-ast hoisted "/tmp/hoisted.dot")))
-
-
-(defun hir-form (form)
-  (let* ((ast (cleavir-generate-ast:generate-ast form *clasp-env* *clasp-system*))
-         (hoisted-ast (clasp-cleavir-ast:hoist-load-time-value ast))
-         (hir (cleavir-ast-to-hir:compile-toplevel hoisted-ast))
-         (clasp-inst *clasp-system*))
-;;    (cleavir-hir-transformations:hir-transformations hir clasp-inst nil nil)
-    ;;    (cleavir-ir:hir-to-mir hir clasp-inst nil nil)
-    (setf *form* form
-          *ast* hoisted-ast
-          *hir* hir)
-    (draw-hir hir)
-    hir))
-
-(defun my-hir-transformations (initial-instruction implementation processor os)
-  (cleavir-hir-transformations:type-inference initial-instruction)
-  (cleavir-hir-transformations:eliminate-typeq initial-instruction)
-  (cleavir-hir-transformations:eliminate-superfluous-temporaries initial-instruction)
-  (cleavir-hir-transformations:process-captured-variables initial-instruction))
-
-(defun mir-form (form)
-  (let ((hir (hir-form form))
-	(clasp-inst *clasp-system*))
-    (my-hir-transformations hir clasp-inst nil nil)
-    (cleavir-ir:hir-to-mir hir clasp-inst nil nil)
-    (draw-mir hir)
-    (setq *mir* hir)))
-
-
-(defun hoisted-mir-form (form)
-  (let* ((ast (cleavir-generate-ast:generate-ast form *clasp-env*))
-	 (hoisted-ast (cleavir-ast-transformations:hoist-load-time-value ast))
-	 (hir (cleavir-ast-to-hir:compile-toplevel hoisted-ast))
-	 (clasp-inst *clasp-system*))
-    (cleavir-hir-transformations:hir-transformations hir clasp-inst nil nil)
-    (cleavir-ir:hir-to-mir hir clasp-inst nil nil)
-    (setf *form* form
-	  *ast* hoisted-ast
-	  *hir* hir)
-    (draw-hir hir)
-    hir))
-
-
-(defvar *form* nil)
-(defvar *ast* nil)
-(defvar *hir* nil)
-(defvar *mir* nil)
-(defun generate-hir-for-clasp-source (&optional (start :init) (end :all) skip-errors)
-  (declare (special cleavir-generate-ast:*compiler*))
-  (let* ((cleavir-generate-ast:*compiler* 'cl:compile-file)
-	 (parts (core::select-source-files end :first-file start :system core:*init-files*))
-	 (pathnames (mapcar (lambda (part) (core:build-pathname part)) parts))
-	 (eof (gensym)))
-    (loop for file in pathnames
-       do (with-open-file (stream file :direction :input)
-	    (loop for form = (read stream nil eof)
-	       until (eq form eof)
-	       do (format t "FORM: ~a~%" form)
-	       do (if (and (eq form :pause-hir) (not *hir-single-step*))
-		      (hir-tpl)
-		      (let* ((ast (cleavir-generate-ast:generate-ast form *clasp-env*))
-			     (hir (cleavir-ast-to-hir:compile-toplevel ast)))
-			(setf *form* form
-			      *ast* ast
-			      *hir* hir)
-			(if *hir-single-step*
-			    (hir-tpl)))))))))
-
-
-
-(defmacro with-ir-function ((lisp-function-name
-			     &key (function-type cmp:+fn-prototype+ function-type-p)
-			     (linkage 'llvm-sys:internal-linkage))
-			       &rest body)
-  (let ((fn-gs (gensym "FUNCTION-")))
-    `(let ((,fn-gs (llvm-sys:function-create 
-		   ,function-type
-		   ',linkage
-		    (cmp:jit-function-name ,lisp-function-name)
-		    cmp:*the-module*)))
-       ,@body
-       ,fn-gs)))
-
-
-
-(defun dump-hir (initial-instruction &optional (stream t))
-  (let ((all-basic-blocks (cleavir-basic-blocks:basic-blocks initial-instruction))
-	initials)
-    (cleavir-ir:map-instructions
-     (lambda (instr)
-       (when (typep instr 'cleavir-ir:enter-instruction)
-	 (push instr initials))) initial-instruction)
-    (dolist (procedure-initial initials)
-      (format stream "====== Procedure: ~a~%" (cc-mir:describe-mir procedure-initial))
-      (let ((basic-blocks (remove procedure-initial
-				  all-basic-blocks
-				  :test-not #'eq :key #'third)))
-	(dolist (bb basic-blocks)
-	  (destructuring-bind (first last owner) bb
-	    (format stream "-------------------basic-block owner: ~a~%" 
-		    (cc-mir:describe-mir owner))
-	    (loop for instruction = first
-	       then (first (cleavir-ir:successors instruction))
-	       until (eq instruction last)
-	       do (format stream "~a~%" (cc-mir:describe-mir instruction)))
-	    (format stream "~a~%" (cc-mir:describe-mir last))))))))
-
-  
+(defmethod cmp:compiler-condition-origin
+    ((condition cleavir-conditions:program-condition))
+  ;; FIXME: ignore-errors is a bit paranoid
+  (let ((source (origin-source (cleavir-conditions:origin condition))))
+    (ignore-errors (if (consp source) (car source) source))))

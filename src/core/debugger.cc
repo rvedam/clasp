@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,426 +24,358 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
+
 #define DEBUG_LEVEL_FULL
 
 #include <csignal>
 #include <execinfo.h>
+#include <iomanip>
 #include <clasp/core/foundation.h>
+#include <dlfcn.h>
+#ifdef _TARGET_OS_DARWIN
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
+#if defined(_TARGET_OS_DARWIN) || defined(_TARGET_OS_FREEBSD)
+#include <err.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+#define _GNU_SOURCE
+#endif
+
 #include <clasp/core/object.h>
 #include <clasp/core/lisp.h>
-#include <clasp/core/conditions.h>
 #include <clasp/core/arguments.h>
 #include <clasp/core/myReadLine.h>
 #include <clasp/core/symbolTable.h>
 #include <clasp/core/sourceFileInfo.h>
 #include <clasp/core/evaluator.h>
-#include <clasp/core/environment.h>
+#include <clasp/core/pathname.h>
 #include <clasp/core/debugger.h>
+#include <clasp/core/funcallableInstance.h>
+#include <clasp/core/hashTableEqual.h>
 #include <clasp/core/primitives.h>
-#include <clasp/core/vectorObjects.h>
+#include <clasp/core/array.h>
+#include <clasp/core/bformat.h>
 #include <clasp/core/write_ugly.h>
+#include <clasp/core/sort.h>
+#include <clasp/core/package.h>
+#include <clasp/core/symbol.h>
 #include <clasp/core/lispStream.h>
+#include <clasp/core/designators.h>
+#include <clasp/llvmo/llvmoExpose.h>
+#include <clasp/llvmo/debugInfoExpose.h>
+#include <clasp/llvmo/code.h>
+#include <clasp/llvmo/jit.h>
 #include <clasp/core/wrappers.h>
+#include <clasp/core/stackmap.h>
+
+#if defined(_TARGET_OS_LINUX) || defined(_TARGET_OS_FREEBSD)
+namespace core {
+void* find_base_of_loaded_object(const char* name);
+core::SymbolTable load_linux_symbol_table(const char* filename, uintptr_t start, uintptr_t& stackmap_start, size_t& stackmap_size);
+}; // namespace core
+#endif
 
 namespace core {
 
-void start_debugger() {
-  _G();
-  LispDebugger dbg(_Nil<T_O>());
-  dbg.invoke();
+DOCGROUP(clasp);
+CL_DEFUN Vaslist_sp core__vaslist_rewind(Vaslist_sp v) {
+  Vaslist* vaslist0 = &*v;
+  Vaslist* vaslist1 = &vaslist0[1];
+  memcpy(vaslist0, vaslist1, sizeof(Vaslist));
+  return v;
 }
 
-LispDebugger::LispDebugger(T_sp condition) : _CanContinue(false), _Condition(condition) {
-  _G();
-  _lisp->incrementDebuggerLevel();
-  af_gotoIhsTop();
-}
-
-LispDebugger::LispDebugger() : _CanContinue(true) {
-  _G();
-  this->_Condition = _Nil<T_O>();
-  _lisp->incrementDebuggerLevel();
-  af_gotoIhsTop();
-}
-
-void LispDebugger::printExpression() {
-  _G();
-  InvocationHistoryFrameIterator_sp frame = this->currentFrame();
-  stringstream ss;
-  ss << frame->frame()->asString();
-  _lisp->print(BF("%s\n") % ss.str());
-}
-
-InvocationHistoryFrameIterator_sp LispDebugger::currentFrame() const {
-  InvocationHistoryFrameIterator_sp frame = core_getInvocationHistoryFrame(af_ihsCurrentFrame());
-  if (frame->isValid())
-    return frame;
-  THROW_HARD_ERROR(BF("%s:%d Could not get frame") % __FILE__ % __LINE__);
-}
-
-T_sp LispDebugger::invoke() {
-  _G();
-  //	DebuggerIHF debuggerStack(_lisp->invocationHistoryStack(),_Nil<ActivationFrame_O>());
-  if (this->_Condition.notnilp()) {
-    _lisp->print(BF("Debugger entered with condition: %s") % _rep_(this->_Condition));
+DOCGROUP(clasp);
+CL_DEFUN Vaslist_sp core__do_validate_vaslist(Vaslist_sp v) {
+  if (!gctools::tagged_vaslistp<T_O*>(v.raw_())) {
+    printf("%s:%d:%s vaslist is not tagged properly %p\n", __FILE__, __LINE__, __FUNCTION__, v.raw_());
+    abort();
   }
-  this->printExpression();
-  _lisp->print(BF("The following restarts are available:"));
-  _lisp->print(BF("ABORT      a    Abort to REPL"));
-  while (1) {
-    string line;
-    stringstream sprompt;
-    sprompt << "Frame-" << this->currentFrame()->index() << "-";
-    sprompt << "Dbg";
-    if (af_ihsEnv(af_ihsCurrentFrame()).notnilp()) {
-      sprompt << "(+ENV)";
-    }
-    sprompt << "[" << _lisp->debuggerLevel() << "]>";
-    bool end_of_transmission(false);
-    line = myReadLine(sprompt.str(), end_of_transmission);
-    if (end_of_transmission)
-      throw core::ExitProgram(0);
-    char cmd;
-    if (line[0] == ':') {
-      cmd = line[1];
-    } else
-      cmd = 'e';
-
-    switch (cmd) {
-    case '?':
-    case 'h': {
-      _lisp->print(BF(":?      - help"));
-      _lisp->print(BF(":h      - help"));
-      _lisp->print(BF("sexp - evaluate sexp"));
-      _lisp->print(BF(":c sexp - continue - return values of evaluating sexp"));
-      _lisp->print(BF(":v      - list local environment"));
-      _lisp->print(BF(":x      - print current expression"));
-      _lisp->print(BF(":e      - evaluate an expression with interpreter"));
-      _lisp->print(BF(":b      - print backtrace"));
-      _lisp->print(BF(":p      - goto previous frame"));
-      _lisp->print(BF(":n      - goto next frame"));
-      _lisp->print(BF(":D      - dissasemble current function"));
-      _lisp->print(BF(":a      - abort and return to top repl"));
-      _lisp->print(BF(":l      - invoke debugger by calling core::dbg_hook (set break point in gdb"));
-      _lisp->print(BF(":g ##   - jump to frame ##"));
-      break;
-    }
-    case 'l':
-      dbg_hook("invoked from debugger");
-      break;
-    case 'g': {
-      int is;
-      for (is = 1; is < line.size(); is++) {
-        if (line[is] >= '0' && line[is] <= '9')
-          break;
-      }
-      if (is < line.size()) {
-        string sexp = line.substr(is, 99999);
-        int frameIdx = atoi(sexp.c_str());
-        if (frameIdx < 0)
-          frameIdx = 0;
-        if (frameIdx > af_ihsTop()) {
-          frameIdx = af_ihsTop();
-        }
-        _lisp->print(BF("Switching to frame: %d") % frameIdx);
-        af_setIhsCurrentFrame(frameIdx);
-        this->printExpression();
-      } else {
-        _lisp->print(BF("You must provide a frame number\n"));
-      }
-      break;
-    }
-    case 'p':
-      af_gotoIhsPrev();
-      this->printExpression();
-      break;
-    case 'n':
-      af_gotoIhsNext();
-      this->printExpression();
-      break;
-    case 'D': {
-      Function_sp func = af_ihsFun(af_ihsCurrentFrame());
-      _lisp->print(BF("Current function: %s\n") % _rep_(func));
-      eval::funcall(cl::_sym_disassemble, func);
-      break;
-    }
-    case 'b': {
-      af_ihsBacktrace(_lisp->_true(), _Nil<T_O>());
-      break;
-    }
-    case 'x': {
-      this->printExpression();
-      break;
-    }
-    case 'v': {
-      this->printExpression();
-      T_sp env = af_ihsEnv(af_ihsCurrentFrame());
-      _lisp->print(BF("activationFrame->%p    .nilp()->%d  .nilp()->%d") % env.raw_() % env.nilp() % env.nilp());
-      if (env.notnilp()) {
-        _lisp->print(BF("%s") % gc::As<Environment_sp>(env)->environmentStackAsString());
-      } else {
-        _lisp->print(BF("-- Only global environment available --"));
-      }
-      break;
-    }
-    case 'a': {
-      throw(DebuggerSaysAbortToRepl());
-    }
-    case 'c': {
-      if (this->_CanContinue) {
-        if (line.size() < 3) {
-          return _Nil<T_O>();
-        }
-        string sexp = line.substr(3, 99999);
-        //		    ControlSingleStep singleStep(false);
-        T_mv result;
-        T_sp env = af_ihsEnv(af_ihsCurrentFrame());
-        //		    DebuggerIHF dbgFrame(_lisp->invocationHistoryStack(),Environment_O::clasp_getActivationFrame(env));
-        result = _lisp->readEvalPrintString(sexp, env, true);
-        if (!result) {
-          result = Values(_Nil<T_O>());
-        }
-        _lisp->print(BF("Continuing with result: %s") % _rep_(result));
-        return result;
-        //		    throw(DebuggerSaysContinue(result));
-      }
-      _lisp->print(BF("You cannot resume after condition thrown"));
-      break;
-    };
-    case 'e': {
-      string sexp = line.substr(0, 99999);
-      //		ControlSingleStep singleStep(false);
-      T_sp env = af_ihsEnv(af_ihsCurrentFrame());
-      //		DebuggerIHF dbgFrame(_lisp->invocationHistoryStack(),Environment_O::clasp_getActivationFrame(env));
-      try {
-        _lisp->readEvalPrintString(sexp, env, true);
-      } catch (DebuggerSaysAbortToRepl &err) {
-        // nothing
-      }
-      break;
-    }
-    case 'i': {
-      string sexp = line.substr(2, 99999);
-      //		ControlSingleStep singleStep(false);
-      T_sp env = af_ihsEnv(af_ihsCurrentFrame());
-      //		DebuggerIHF dbgFrame(_lisp->invocationHistoryStack(),Environment_O::clasp_getActivationFrame(env));
-      try {
-        DynamicScopeManager scope(comp::_sym_STARimplicit_compile_hookSTAR, comp::_sym_implicit_compile_hook_default->symbolFunction());
-        _lisp->readEvalPrintString(sexp, env, true);
-      } catch (DebuggerSaysAbortToRepl &err) {
-        // nothing
-      }
-      break;
-    }
-    default: {
-      _lisp->print(BF("Unknown command[%c] - try '?'") % cmd);
-    }
-    }
+  if (v->nargs() > 2048) {
+    printf("%s:%d:%s vaslist nargs = %lu\n", __FILE__, __LINE__, __FUNCTION__, v->nargs());
+    abort();
   }
+  if (((uintptr_t)v->args()) & 0x7) {
+    printf("%s:%d:%s vaslist args is not aligned %p\n", __FILE__, __LINE__, __FUNCTION__, v->args());
+    abort();
+  }
+  return v;
 }
 
-#define ARGS_core_lowLevelBacktrace "()"
-#define DECL_core_lowLevelBacktrace ""
-#define DOCS_core_lowLevelBacktrace "lowLevelBacktrace"
-void core_lowLevelBacktrace() {
-  InvocationHistoryStack &ihs = _lisp->invocationHistoryStack();
-  InvocationHistoryFrame *top = ihs.top();
-  if (top == NULL) {
-    printf("Empty InvocationHistoryStack\n");
-    return;
+DOCGROUP(clasp);
+CL_DEFUN size_t core__vaslist_length(Vaslist_sp v) {
+  //  printf("%s:%d vaslist length %" PRu "\n", __FILE__, __LINE__, v->nargs());
+  return v->nargs();
+}
+
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__vaslist_pop(Vaslist_sp v) {
+#ifdef DEBUG_VASLIST
+  if (_sym_STARdebugVaslistSTAR && _sym_STARdebugVaslistSTAR->symbolValue().notnilp()) {
+    printf("%s:%d:%s nargs: %lu  args: %p\n", __FILE__, __LINE__, __FUNCTION__, v->_nargs, v->_args);
   }
-  printf("From bottom to top invocation-history-stack frames = %d\n", top->_Index + 1);
-  for (InvocationHistoryFrame *cur = top; cur != NULL; cur = cur->_Previous) {
-    string name = "-no-name-";
-    gctools::tagged_pointer<Closure> closure = cur->closure;
-    if (!closure) {
-      name = "-NO-CLOSURE-";
+#endif
+  T_sp val = v->next_arg();
+#ifdef DEBUG_VASLIST
+  if (_sym_STARdebugVaslistSTAR && _sym_STARdebugVaslistSTAR->symbolValue().notnilp()) {
+    printf("%s:%d:%s Returning vaslist_pop-> @%p\n", __FILE__, __LINE__, __FUNCTION__, val.raw_());
+    printf("%s:%d:%s Returning vaslist_pop->%s\n", __FILE__, __LINE__, __FUNCTION__, _rep_(val).c_str());
+  }
+#endif
+  return val;
+}
+
+DOCGROUP(clasp);
+CL_DEFUN bool core__vaslistp(T_sp o) { return o.valistp(); }
+
+DOCGROUP(clasp);
+CL_DEFUN List_sp core__list_from_vaslist(Vaslist_sp vorig) {
+  Vaslist valist_copy(*vorig);
+  Vaslist_sp valist(&valist_copy);
+  ql::list l;
+  size_t nargs = valist->nargs();
+  //  printf("%s:%d in %s  nargs=%zu\n", __FILE__, __LINE__, __FUNCTION__, nargs);
+  for (size_t i = 0; i < nargs; ++i) {
+    T_sp one = valist->next_arg_indexed(i);
+    l << one;
+  }
+  T_sp result = l.cons();
+  return result;
+}
+}; // namespace core
+
+namespace core {
+
+DebugInfo* global_DebugInfo = NULL;
+
+DebugInfo& debugInfo() {
+  if (!global_DebugInfo) {
+    global_DebugInfo = new DebugInfo();
+  }
+  return *global_DebugInfo;
+}
+
+void add_dynamic_library_using_origin(add_dynamic_library* adder, bool is_executable, const std::string& libraryName,
+                                      uintptr_t origin, gctools::clasp_ptr_t text_start, gctools::clasp_ptr_t text_end,
+                                      bool hasDataConst, gctools::clasp_ptr_t dataConstStart, gctools::clasp_ptr_t dataConstEnd) {
+  // printf("%s:%d:%s  About to call add_dynamic_library_using_origin libname = %s   is_executable = %d\n", __FILE__, __LINE__,
+  // __FUNCTION__, libraryName.c_str(), is_executable );
+  add_dynamic_library_impl(adder, is_executable, libraryName, true, origin, NULL, text_start, text_end, hasDataConst,
+                           dataConstStart, dataConstEnd);
+}
+
+bool if_dynamic_library_loaded_remove(const std::string& libraryName) {
+#ifdef CLASP_THREADS
+  WITH_READ_WRITE_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+#endif
+  map<string, OpenDynamicLibraryInfo*>::iterator fi = debugInfo()._OpenDynamicLibraryHandles.find(libraryName);
+  bool exists = (fi != debugInfo()._OpenDynamicLibraryHandles.end());
+  if (exists) {
+    //    if (fi->second._SymbolTable._SymbolNames) free((void*)(fi->second._SymbolTable._SymbolNames));
+    BT_LOG(("What about the stackmaps for this library - you need to remove them as well - I should probably NOT store stackmaps "
+            "for libraries - but fetch them every time we need a backtrace!\n"));
+    if (fi->second->_Handle == 0) {
+      printf("%s:%d:%s You cannot remove the library %s\n", __FILE__, __LINE__, __FUNCTION__, libraryName.c_str());
     } else {
-      if (closure->name.notnilp()) {
-        try {
-          name = _rep_(closure->name);
-        } catch (...) {
-          name = "-BAD-NAME-";
-        }
-      }
+      dlclose(fi->second->_Handle);
+      debugInfo()._OpenDynamicLibraryHandles.erase(libraryName);
     }
-    /*Nilable?*/ T_sp sfi = core_sourceFileInfo(make_fixnum(closure->sourceFileInfoHandle()));
-    string sourceName = "cannot-determine";
-    if (sfi.notnilp()) {
-      sourceName = gc::As<SourceFileInfo_sp>(sfi)->fileName();
-    }
-    printf("_Index: %4d  Frame@%p(previous=%p)  closure@%p  closure->name[%40s]  line: %3d  file: %s\n", cur->_Index, cur, cur->_Previous, closure, name.c_str(), closure->lineNumber(), sourceName.c_str());
   }
-  printf("----Done\n");
+  return exists;
 }
 
-#define ARGS_core_clibBacktrace "(depth)"
-#define DECL_core_clibBacktrace ""
-#define DOCS_core_clibBacktrace "backtrace"
-void core_clibBacktrace(int depth) {
-  _G();
-// Play with Unix backtrace(3)
-#define BACKTRACE_SIZE 1024
-  printf("Entered core_clibBacktrace - symbol: %s\n", _rep_(INTERN_(core, theClibBacktraceFunctionSymbol)).c_str());
-  void *buffer[BACKTRACE_SIZE];
-  char *funcname = (char *)malloc(1024);
-  size_t funcnamesize = 1024;
-  int nptrs;
-  nptrs = backtrace(buffer, BACKTRACE_SIZE);
-  char **strings = backtrace_symbols(buffer, nptrs);
-  if (strings == NULL) {
-    printf("No backtrace available\n");
-    return;
-  } else {
-    for (int i = 0; i < nptrs; ++i) {
-      if (i >= depth)
-        break;
-      std::string front = std::string(strings[i], 57);
-      char *fnName = &strings[i][59];
-      char *fnCur = fnName;
-      int len = 0;
-      for (; *fnCur; ++fnCur) {
-        if (*fnCur == ' ')
-          break;
-        ++len;
+void executablePath(std::string& name) {
+  WITH_READ_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+  for (auto& entry : debugInfo()._OpenDynamicLibraryHandles) {
+    if (entry.second->loadableKind() == Executable) {
+      name = entry.second->_Filename;
+      return;
+    }
+  }
+  SIMPLE_ERROR("Could not find the executablePath");
+}
+void executableVtableSectionRange(gctools::clasp_ptr_t& start, gctools::clasp_ptr_t& end) {
+  WITH_READ_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+  for (auto& entry : debugInfo()._OpenDynamicLibraryHandles) {
+    if (entry.second->loadableKind() == Executable) {
+      ExecutableLibraryInfo* eli = dynamic_cast<ExecutableLibraryInfo*>(entry.second);
+      start = eli->_VtableSectionStart;
+      end = eli->_VtableSectionEnd;
+      // printf("%s:%d:%s start %p   end %p\n", __FILE__, __LINE__, __FUNCTION__, start, end );
+      return;
+    }
+  }
+  SIMPLE_ERROR("Could not find the executableVtableSectionRange");
+}
+
+void executableTextSectionRange(gctools::clasp_ptr_t& start, gctools::clasp_ptr_t& end) {
+  WITH_READ_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+  for (auto& entry : debugInfo()._OpenDynamicLibraryHandles) {
+    if (entry.second->loadableKind() == Executable) {
+      start = entry.second->_TextStart;
+      end = entry.second->_TextEnd;
+      return;
+    }
+  }
+  SIMPLE_ERROR("Could not find the executableVtableSectionRange");
+}
+
+bool lookup_address_in_library(gctools::clasp_ptr_t address, gctools::clasp_ptr_t& start, gctools::clasp_ptr_t& end,
+                               std::string& libraryName, bool& executable, uintptr_t& vtableStart, uintptr_t& vtableEnd) {
+  WITH_READ_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+  for (auto entry : debugInfo()._OpenDynamicLibraryHandles) {
+    //    printf("%s:%d:%s Looking at entry: %s start: %p end: %p\n", __FILE__, __LINE__, __FUNCTION__,
+    //    entry.second._Filename.c_str(), entry.second._LibraryStart, entry.second._LibraryEnd );
+    if (ExecutableLibraryInfo* eli = dynamic_cast<ExecutableLibraryInfo*>(entry.second)) {
+      if (eli->_TextStart <= address && address < eli->_TextEnd ||
+          (eli->_VtableSectionStart <= address && address < eli->_VtableSectionEnd)) {
+        libraryName = eli->_Filename;
+        start = eli->_TextStart;
+        end = eli->_TextEnd;
+        executable = true;
+        vtableStart = (uintptr_t)eli->_VtableSectionStart;
+        vtableEnd = (uintptr_t)eli->_VtableSectionEnd;
+        return true;
       }
-      int status;
-      fnName[len] = '\0';
-      char *rest = &fnName[len + 1];
-      char *ret = abi::__cxa_demangle(fnName, funcname, &funcnamesize, &status);
-      if (status == 0) {
-        funcname = ret; // use possibly realloc()-ed string
-        printf("  %s %s %s\n", front.c_str(), funcname, rest);
-      } else {
-        // demangling failed. Output function name as a C function with
-        // no arguments.
-        printf("  %s\n", strings[i]);
+    } else if (entry.second->_TextStart <= address && address < entry.second->_TextEnd) {
+      libraryName = entry.second->_Filename;
+      start = entry.second->_TextStart;
+      end = entry.second->_TextEnd;
+      executable = false;
+      vtableStart = 0; // libraries don't have vtables we care about
+      vtableEnd = 0;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool library_with_name(const std::string& name, bool isExecutable, std::string& libraryName, uintptr_t& start, uintptr_t& end,
+                       uintptr_t& vtableStart, uintptr_t& vtableEnd) {
+  WITH_READ_LOCK(debugInfo()._OpenDynamicLibraryMutex);
+  for (auto entry : debugInfo()._OpenDynamicLibraryHandles) {
+    std::string libName = entry.second->_Filename;
+    if (ExecutableLibraryInfo* eli = dynamic_cast<ExecutableLibraryInfo*>(entry.second)) {
+      if (isExecutable || (name.size() <= libName.size() && name == libName.substr(libName.size() - name.size()))) {
+        libraryName = eli->_Filename;
+        start = (uintptr_t)(eli->_TextStart);
+        end = (uintptr_t)(eli->_TextEnd);
+        vtableStart = (uintptr_t)eli->_VtableSectionStart;
+        vtableEnd = (uintptr_t)eli->_VtableSectionEnd;
+        //      printf("%s:%d:%s isExecutable = %d name = %s  libraryName = %s\n", __FILE__, __LINE__, __FUNCTION__, isExecutable,
+        //      name.c_str(), libraryName.c_str());
+        return true;
+      }
+    } else {
+      if (name.size() <= libName.size() && name == libName.substr(libName.size() - name.size())) {
+        if (isExecutable) {
+          printf("%s:%d:%s THERE IS A PROBLEM - The library %s is being searched for as Executable but it is not\n", __FILE__,
+                 __LINE__, __FUNCTION__, name.c_str());
+        }
+        libraryName = entry.second->_Filename;
+        start = (uintptr_t)(entry.second->_TextStart);
+        end = (uintptr_t)(entry.second->_TextEnd);
+        vtableStart = 0; // (uintptr_t)entry.second->_VtableSectionStart;
+        vtableEnd = 0;   // (uintptr_t)entry.second->_VtableSectionEnd;
+        //      printf("%s:%d:%s isExecutable = %d name = %s  libraryName = %s\n", __FILE__, __LINE__, __FUNCTION__, isExecutable,
+        //      name.c_str(), libraryName.c_str());
+        return true;
       }
     }
   }
-  if (strings)
-    free(strings);
-  if (funcname)
-    free(funcname);
-};
+  return false;
+}
 
-#define ARGS_af_framePointers "()"
-#define DECL_af_framePointers ""
-#define DOCS_af_framePointers "framePointers"
-void af_framePointers() {
-  void *fp = __builtin_frame_address(0); // Constant integer only
-  if (fp != NULL)
-    printf("Frame pointer --> %p\n", fp);
-};
-};
+bool lookup_address(uintptr_t address, const char*& symbol, uintptr_t& start, uintptr_t& end) {
+  void* ip = (void*)address;
+  T_sp of = llvmo::only_object_file_for_instruction_pointer(ip);
+  if (!gc::IsA<llvmo::ObjectFile_sp>(of))
+    return false; // no ofi found
 
-extern "C" {
+  // Get DWARF stuff set up
+  llvmo::ObjectFile_sp ofi = gc::As_unsafe<llvmo::ObjectFile_sp>(of);
+  llvmo::SectionedAddress_sp sa = object_file_sectioned_address(ip, ofi, false);
+  llvmo::DWARFContext_sp dcontext = llvmo::DWARFContext_O::createDWARFContext(ofi);
+
+  symbol = llvmo::getFunctionNameForAddress(dcontext, sa);
+
+  // Get the address ranges
+  uintptr_t code_start = ofi->codeStart();
+  auto eranges = llvmo::getAddressRangesForAddressInner(dcontext, sa);
+  if (eranges) {
+    auto ranges = eranges.get();
+    // NOTE: We assume the first range is the one we got. Practically speaking
+    // I think this is okay?
+    if (ranges.empty())
+      return false;
+    start = code_start + ranges[0].LowPC;
+    end = code_start + ranges[0].HighPC;
+    return true; // success!
+  } else
+    return false; // no ranges available
+}
+
+SYMBOL_EXPORT_SC_(KeywordPkg, function_name);
+SYMBOL_EXPORT_SC_(KeywordPkg, arguments);
+SYMBOL_EXPORT_SC_(KeywordPkg, closure);
+
+}; // namespace core
 
 namespace core {
-#define ARGS_af_gotoIhsTop "()"
-#define DECL_af_gotoIhsTop ""
-#define DOCS_af_gotoIhsTop "gotoIhsTop"
-void af_gotoIhsTop() {
-  _G();
-  _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(af_ihsTop()));
-};
 
-#define ARGS_af_gotoIhsPrev "()"
-#define DECL_af_gotoIhsPrev ""
-#define DOCS_af_gotoIhsPrev "gotoIhsPrev"
-void af_gotoIhsPrev() {
-  _G();
-  int ihsCur = af_ihsCurrentFrame();
-  _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(af_ihsPrev(ihsCur)));
-};
+DOCGROUP(clasp);
+CL_DEFUN void core__lowLevelDescribe(T_sp obj) { dbg_lowLevelDescribe(obj); }
 
-#define ARGS_af_gotoIhsNext "()"
-#define DECL_af_gotoIhsNext ""
-#define DOCS_af_gotoIhsNext "gotoIhsNext"
-void af_gotoIhsNext() {
-  _G();
-  int ihsCur = af_ihsCurrentFrame();
-  _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(af_ihsNext(ihsCur)));
-};
-
-#define ARGS_af_gotoIhsFrame "(frame-index)"
-#define DECL_af_gotoIhsFrame ""
-#define DOCS_af_gotoIhsFrame "gotoIhsFrame"
-void af_gotoIhsFrame(int frame_index) {
-  _G();
-  if (frame_index < 0)
-    frame_index = 0;
-  if (frame_index >= af_ihsTop())
-    frame_index = af_ihsTop() - 1;
-  int ihsCur = frame_index;
-  _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(ihsCur));
-};
-
-#define ARGS_af_printCurrentIhsFrame "()"
-#define DECL_af_printCurrentIhsFrame ""
-#define DOCS_af_printCurrentIhsFrame "printCurrentIhsFrame"
-void af_printCurrentIhsFrame() {
-  _G();
-  int ihsCur = af_ihsCurrentFrame();
-  Function_sp fun = af_ihsFun(ihsCur);
-  printf("Frame[%d] %s\n", ihsCur, _rep_(fun).c_str());
-};
-
-#define ARGS_af_printCurrentIhsFrameEnvironment "()"
-#define DECL_af_printCurrentIhsFrameEnvironment ""
-#define DOCS_af_printCurrentIhsFrameEnvironment "printCurrentIhsFrameEnvironment"
-void af_printCurrentIhsFrameEnvironment() {
-  T_sp args = af_ihsArguments(af_ihsCurrentFrame());
-  if (args.notnilp()) {
-    VectorObjects_sp vargs = gc::As<VectorObjects_sp>(args);
-    for (int i = 0; i < cl_length(vargs); ++i) {
-      _lisp->print(BF("arg%s --> %s") % i % _rep_(vargs->elt(i)));
-    }
-  } else {
-    _lisp->print(BF("Args not available"));
-  }
-  T_sp env = af_ihsEnv(af_ihsCurrentFrame());
-  if (env.notnilp()) {
-    printf("%s\n", gc::As<Environment_sp>(env)->environmentStackAsString().c_str());
-  } else {
-    printf("-- Only global environment available --\n");
-  }
+DOCGROUP(clasp);
+CL_DEFUN core::T_mv core__lookup_address(core::Pointer_sp address) {
+  const char* symbol;
+  uintptr_t start;
+  uintptr_t end;
+  if (lookup_address((uintptr_t)(address->ptr()), symbol, start, end))
+    return Values(SimpleBaseString_O::make(symbol), Pointer_O::create((void*)start), Pointer_O::create((void*)end));
+  else
+    return Values(nil<core::T_O>(), nil<core::T_O>(), nil<core::T_O>());
 }
 
-#define ARGS_af_evalPrint "(arg)"
-#define DECL_af_evalPrint ""
-#define DOCS_af_evalPrint "evalPrint"
-void af_evalPrint(const string &expr) {
-  _G();
-  printf("If this locks up then there was an error in the evaluation\n");
-  printf("Figure out how to make debugger.cc>>af_evalPrint always return\n");
-  int ihsCur = af_ihsCurrentFrame();
-  T_sp env = af_ihsEnv(ihsCur);
-  _lisp->readEvalPrintString(expr, env, true);
-};
+void dbg_Vaslist_sp_describe(T_sp obj) {
+  // Convert the T_sp object into a Vaslist_sp object
+  Vaslist_sp vl = Vaslist_sp((gc::Tagged)obj.raw_());
+  printf("Original vaslist at: %p\n", &*((Vaslist*)gc::untag_vaslist(reinterpret_cast<Vaslist*>(obj.raw_()))));
+  // Create a copy of the Vaslist with a va_copy of the vaslist
+  Vaslist vlcopy_s(*vl);
+  Vaslist_sp vlcopy(&vlcopy_s);
+  printf("Calling dump_Vaslist_ptr\n");
+  bool atHead = dump_Vaslist_ptr(stdout, &vlcopy_s);
+  if (atHead) {
+    for (size_t i(0), iEnd(vlcopy->nargs()); i < iEnd; ++i) {
+      T_sp v = vlcopy->next_arg_indexed(i);
+      printf("entry@%p %3zu --> %s\n", v.raw_(), i, _rep_(v).c_str());
+    }
+  }
+}
 
 void dbg_lowLevelDescribe(T_sp obj) {
   if (obj.valistp()) {
-    // Convert the T_sp object into a VaList_sp object
-    VaList_sp vl = VaList_sp((gc::Tagged)obj.raw_());
-    printf("Original va_list at: %p\n", &((VaList_S *)gc::untag_valist(reinterpret_cast<VaList_S *>(obj.raw_())))->_Args);
-    // Create a copy of the VaList_S with a va_copy of the va_list
-    VaList_S vlcopy_s(*vl);
-    VaList_sp vlcopy(&vlcopy_s);
-    printf("VaList_sp\n");
-    for (size_t i(0); i < LCC_VA_LIST_NUMBER_OF_ARGUMENTS(vlcopy); ++i) {
-      printf("entry %3d --> %s\n", i, _rep_(LCC_NEXT_ARG(vlcopy, i)).c_str());
-    }
+    dbg_Vaslist_sp_describe(obj);
   } else if (obj.fixnump()) {
-    printf("fixnum_tag: %ld\n", obj.unsafe_fixnum());
+    printf("fixnum_tag: %" PFixnum "\n", obj.unsafe_fixnum());
   } else if (obj.single_floatp()) {
     printf("single-float: %f\n", obj.unsafe_single_float());
   } else if (obj.characterp()) {
     printf("character: %d #\\%c\n", obj.unsafe_character(), obj.unsafe_character());
   } else if (obj.generalp()) {
-    printf("other_tag: %p  typeid: %s\n", &*obj, typeid(obj).name());
-    printf("More info:\n");
-    printf("%s\n", _rep_(obj).c_str());
+    printf("    vtable-ptr: %p  typeid: %s\n", &*obj, typeid(obj.unsafe_general()).name());
+    printf("className-> %s\n", obj.unsafe_general()->className().c_str());
+    printf("contents-> [%s]\n", _rep_(obj).c_str());
+    if (Function_sp closure = obj.asOrNull<Function_O>()) {
+      core__closure_slots_dump(closure);
+    }
   } else if (obj.consp()) {
     printf("cons_tag: %p  typeid: %s\n", &*obj, typeid(obj).name());
     printf("List:  \n");
@@ -457,56 +389,32 @@ void dbg_lowLevelDescribe(T_sp obj) {
   fflush(stdout);
 }
 
-void dbg_mv_lowLevelDescribe(T_mv mv_obj) {
-  gc::Vec0<core::T_sp> values;
-  mv_obj.saveToVec0(values);
-  for (int i(0), iEnd(values.size()); i < iEnd; ++i) {
-    printf("Multiple value#%d\n", i);
-    dbg_lowLevelDescribe(values[i]);
-  }
-  fflush(stdout);
-}
+void dbg_describe_tagged_T_Optr(T_O* p) { client_describe(p); }
 
-void dbg_describe_tagged_T_Optr(T_O *p) {
-  gctools::headerDescribe(p);
-  T_sp obj((gctools::Tagged) reinterpret_cast<T_O *>(p));
-  dbg_lowLevelDescribe(obj);
-}
-
-void dbg_describe_tagged_T_Optr_header(T_O *p) {
-  gctools::headerDescribe(p);
-}
+void dbg_describe_tagged_T_Optr_header(T_O* p) { client_describe(p); }
 
 extern void dbg_describe(T_sp obj);
 void dbg_describe(T_sp obj) {
-  DynamicScopeManager(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
+  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, nil<T_O>());
   stringstream ss;
-  printf("dbg_describe object class--> %s\n", _rep_(obj->__class()->className()).c_str());
+  printf("dbg_describe object class--> %s\n", _rep_(cl__class_of(obj)->_className()).c_str());
   ss << _rep_(obj);
   printf("dbg_describe: %s\n", ss.str().c_str());
   fflush(stdout);
 }
 
 void dbg_describe_cons(Cons_sp obj) {
-  DynamicScopeManager(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
+  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, nil<T_O>());
   stringstream ss;
-  printf("dbg_describe object class--> %s\n", _rep_(obj->__class()->className()).c_str());
+  printf("dbg_describe object class--> CONS\n");
   ss << _rep_(obj);
   printf("dbg_describe: %s\n", ss.str().c_str());
 }
 
 void dbg_describe_symbol(Symbol_sp obj) {
-  DynamicScopeManager(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
+  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, nil<T_O>());
   stringstream ss;
-  printf("dbg_describe object class--> %s\n", _rep_(obj->__class()->className()).c_str());
-  ss << _rep_(obj);
-  printf("dbg_describe: %s\n", ss.str().c_str());
-}
-
-void dbg_describeActivationFrame(ActivationFrame_sp obj) {
-  DynamicScopeManager(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
-  stringstream ss;
-  printf("dbg_describe ActivationFrame class--> %s\n", _rep_(obj->__class()->className()).c_str());
+  printf("dbg_describe object class--> %s\n", _rep_(obj->__class()->_className()).c_str());
   ss << _rep_(obj);
   printf("dbg_describe: %s\n", ss.str().c_str());
 }
@@ -518,9 +426,9 @@ void dbg_describeTPtr(uintptr_t raw) {
   }
   T_sp obj = gctools::smart_ptr<T_O>(raw);
   printf("dbg_describeTPtr Raw pointer value: %p\n", obj.raw_());
-  DynamicScopeManager(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
+  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, nil<T_O>());
   stringstream ss;
-  printf("dbg_describe object class--> %s\n", _rep_(obj->__class()->className()).c_str());
+  printf("dbg_describe object class--> %s\n", _rep_(lisp_instance_class(obj)->_className()).c_str());
   ss << _rep_(obj);
   printf("dbg_describe: %s\n", ss.str().c_str());
   fflush(stdout);
@@ -529,31 +437,205 @@ void dbg_describeTPtr(uintptr_t raw) {
 void dbg_printTPtr(uintptr_t raw, bool print_pretty) {
   core::T_sp sout = cl::_sym_STARstandard_outputSTAR->symbolValue();
   T_sp obj = gctools::smart_ptr<T_O>((gc::Tagged)raw);
-  clasp_write_string((BF("dbg_printTPtr Raw pointer value: %p\n") % (void *)obj.raw_()).str(), sout);
-  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, _Nil<T_O>());
-  scope.pushSpecialVariableAndSet(cl::_sym_STARprint_readablySTAR, _lisp->_boolean(print_pretty));
-  clasp_write_string((BF("dbg_printTPtr object class --> %s\n") % _rep_(obj->__class()->className())).str(), sout);
+  clasp_write_string(fmt::format("dbg_printTPtr Raw pointer value: {}\n", (void*)obj.raw_()));
+  DynamicScopeManager scope(_sym_STARenablePrintPrettySTAR, nil<T_O>());
+  DynamicScopeManager scope2(cl::_sym_STARprint_readablySTAR, _lisp->_boolean(print_pretty));
+  clasp_write_string(fmt::format("dbg_printTPtr object class --> {}\n", _rep_(lisp_instance_class(obj)->_className())), sout);
   fflush(stdout);
   write_ugly_object(obj, sout);
-  clasp_force_output(sout);
+  stream_force_output(sout);
+}
+
+} // namespace core
+
+extern "C" {
+#define REPR_ADDR(addr) << "@" << (void*)addr
+// #define REPR_ADDR(addr)
+
+/*! Generate text representation of a objects without using the lisp printer!
+This code MUST be bulletproof!  It must work under the most memory corrupted conditions */
+std::string dbg_safe_repr(uintptr_t raw) {
+  stringstream ss;
+  core::T_sp obj((gc::Tagged)raw);
+  if (gc::tagged_generalp((gc::Tagged)raw) || gc::tagged_consp((gc::Tagged)raw)) {
+    // protect us from bad pointers
+    if (raw < 0x1000) {
+      ss << "BAD-TAGGED-POINTER(" REPR_ADDR(raw) << ")";
+      return ss.str();
+    }
+  }
+  if (obj.generalp()) {
+    if (gc::IsA<core::Symbol_sp>(obj)) {
+      core::Symbol_sp sym = gc::As_unsafe<core::Symbol_sp>(obj);
+      core::Package_sp pkg = gc::As_unsafe<core::Package_sp>(sym->_HomePackage.load());
+      if (pkg.generalp() && gc::IsA<core::Package_sp>(pkg)) {
+        if (pkg->isKeywordPackage()) {
+          ss << ":";
+        } else {
+          ss << pkg->_Name->get_std_string() << "::";
+        }
+      }
+      if (sym->_Name.generalp() && gc::IsA<core::String_sp>(sym->_Name)) {
+        ss << sym->_Name->get_std_string();
+      }
+    } else if (gc::IsA<core::SimpleBaseString_sp>(obj)) {
+      core::SimpleBaseString_sp sobj = gc::As_unsafe<core::SimpleBaseString_sp>(obj);
+      ss << "\"" << sobj->get_std_string() << "\"";
+    } else if (gc::IsA<core::SimpleCharacterString_sp>(obj)) {
+      core::SimpleCharacterString_sp sobj = gc::As_unsafe<core::SimpleCharacterString_sp>(obj);
+      ss << "\"" << sobj->get_std_string() << "\"";
+    } else if (gc::IsA<core::Str8Ns_sp>(obj)) {
+      core::Str8Ns_sp sobj = gc::As_unsafe<core::Str8Ns_sp>(obj);
+      ss << "\"" << sobj->get_std_string() << "\"";
+    } else if (gc::IsA<core::SimpleVector_sp>(obj)) {
+      core::SimpleVector_sp svobj = gc::As_unsafe<core::SimpleVector_sp>(obj);
+      ss << "#(";
+      for (size_t i = 0, iEnd(svobj->length()); i < iEnd; ++i) {
+        ss << dbg_safe_repr((uintptr_t)((*svobj)[i]).raw_()) << " ";
+      }
+      ss << ")" REPR_ADDR(raw);
+    } else if (gc::IsA<core::FuncallableInstance_sp>(obj)) {
+      core::FuncallableInstance_sp fi = gc::As_unsafe<core::FuncallableInstance_sp>(obj);
+      ss << "#<$FUNCALLABLE-INSTANCE ";
+      ss << _safe_rep_(fi->functionName());
+      ss << " :class " << _safe_rep_(fi->_Class->_className());
+      ss << "$>" REPR_ADDR(raw);
+    } else if (gc::IsA<llvmo::SectionedAddress_sp>(obj)) {
+      llvmo::SectionedAddress_sp sa = gc::As_unsafe<llvmo::SectionedAddress_sp>(obj);
+      ss << "#<$SECTIONED-ADDRESS :address " << (void*)sa->_value.Address;
+      ss << " :section-index " << sa->_value.SectionIndex;
+      ss << " " REPR_ADDR(raw) << "$>";
+    } else if (gc::IsA<llvmo::ObjectFile_sp>(obj)) {
+      llvmo::ObjectFile_sp of = gc::As_unsafe<llvmo::ObjectFile_sp>(obj);
+      ss << "#<$OBJECT-FILE :code-start " << (void*)of->codeStart();
+      ss << " :code-end " << (void*)of->codeEnd();
+      ss << " " REPR_ADDR(raw) << "$>";
+    } else if (gc::IsA<core::Instance_sp>(obj)) {
+      core::Instance_sp ii = gc::As_unsafe<core::Instance_sp>(obj);
+      ss << "#<$INSTANCE :class ";
+      ss << _safe_rep_(ii->_Class->_className());
+      ss << " " REPR_ADDR(raw) << "$>";
+    } else if (gc::IsA<core::Pathname_sp>(obj)) {
+      core::Pathname_sp ii = gc::As_unsafe<core::Pathname_sp>(obj);
+      ss << "#<$PATHNAME ";
+      if (CONS_CAR(ii->_Directory) == kw::_sym_absolute) {
+        ss << "/";
+      }
+      for (auto x : gc::As_unsafe<core::List_sp>(CONS_CDR(ii->_Directory))) {
+        ss << _safe_rep_(CONS_CAR(x));
+        ss << "/";
+      }
+      ss << _safe_rep_(ii->_Name);
+      ss << ".";
+      ss << _safe_rep_(ii->_Type);
+      ss << " " REPR_ADDR(raw) << "$>";
+    } else {
+      core::General_sp gen = gc::As_unsafe<core::General_sp>(obj);
+      ss << "#<$" << gen->className() << " " REPR_ADDR(gen.raw_()) << "$>";
+    }
+  } else if (obj.consp()) {
+    ss << "(";
+    while (obj.consp()) {
+      ss << dbg_safe_repr((uintptr_t)CONS_CAR(obj).raw_()) << " ";
+      obj = CONS_CDR(obj);
+    }
+    if (obj.notnilp()) {
+      ss << ". ";
+      ss << dbg_safe_repr((uintptr_t)obj.raw_());
+    }
+    ss << ")";
+  } else if (obj.fixnump()) {
+    ss << (gc::Fixnum)obj.unsafe_fixnum();
+  } else if (obj.nilp()) {
+    ss << "NIL";
+  } else if (obj.valistp()) {
+    core::Vaslist_sp vaslist = gc::As_unsafe<core::Vaslist_sp>(obj);
+    ss << "#<$VASLIST ";
+    ;
+#if 0
+    // difference during diff
+    ss << (void*)obj.raw_();
+#endif
+#if 0
+    ss  << " :args @" << (void*)vaslist->_args;
+    ;
+#endif
+    ss << ":nargs " << vaslist->nargs();
+    ss << " :contents (";
+    for (size_t ii = 0; ii < vaslist->nargs(); ii++) {
+      ss << dbg_safe_repr((uintptr_t)vaslist->relative_indexed_arg(ii)) << " ";
+    }
+    ss << ")$>";
+  } else if (obj.unboundp()) {
+    ss << "#:UNBOUND";
+  } else if (obj.characterp()) {
+    ss << "#\\" << (char)obj.unsafe_character() << "[" << (int)obj.unsafe_character() << "]";
+  } else if (obj.single_floatp()) {
+    ss << (float)obj.unsafe_single_float();
+  } else {
+    ss << " #<$RAW" REPR_ADDR(obj.raw_()) << "$>";
+  }
+  if (ss.str().size() > 2048) {
+    return ss.str().substr(0, 2048);
+  }
+  return ss.str();
 }
 };
 
-/*! Sets the flag that controlC has been pressed so that when
-      the process continues it will drop into the debugging repl */
-void dbg_controlC() {
-  SET_SIGNAL(SIGINT);
-  printf("%s:%d   Simulating SIGINT (Control-C) signal - debugging REPL will start up when you continue\n", __FILE__, __LINE__);
-}
+string _safe_rep_(core::T_sp obj) { return dbg_safe_repr((uintptr_t)obj.raw_()); }
+
+extern "C" {
+
+void dbg_safe_print(uintptr_t raw) { printf(" %s", dbg_safe_repr(raw).c_str()); }
+
+void dbg_safe_println(uintptr_t raw) { printf(" %s\n", dbg_safe_repr(raw).c_str()); }
 };
 
+extern "C" {
+
+void tprint(void* ptr) { core::dbg_printTPtr((uintptr_t)ptr, false); }
+
+void tsymbol(void* ptr) {
+  printf("%s:%d Looking up symbol at ptr->%p\n", __FILE__, __LINE__, ptr);
+  core::T_sp result = llvmo::llvm_sys__lookup_jit_symbol_info(ptr);
+  printf("      Result -> %s\n", _rep_(result).c_str());
+}
+
+SYMBOL_EXPORT_SC_(CorePkg, primitive_print_backtrace);
+void dbg_primitive_print_backtrace() { core::eval::funcall(core::_sym_primitive_print_backtrace); }
+
+void dbg_safe_backtrace() {
+  printf("%s:%d:%s This is where we would have clasp dump a backtrace that doesn't use the printer or allocate memory\n", __FILE__,
+         __LINE__, __FUNCTION__);
+  printf(
+      "          We don't currently have that functionality - but if we did it would use backtrace(), backtrace_symbols()\n"
+      "          and scrape the DWARF accessible through _lisp->_Roots._AllObjectFiles to build a backtrace with JIT function "
+      "names\n"
+      "          we can use the ObjectFile_O and Code_O objects to figure out what return addresses are JITted code and what "
+      "DWARF\n"
+      "          belongs to each return address.\n"
+      "          It might be better to use the gdb JIT API (https://sourceware.org/gdb/current/onlinedocs/gdb/JIT-Interface.html)\n"
+      "          What I'm missing to make the gdb JIT API work is how do we know where the code lives for the object "
+      "file/symfile?\n"
+      "          It would be useful to examine __jit_debug_descriptor and look at the symfile_addr/symfile_size entries to figure "
+      "out\n"
+      "          where they point relative to what we have in _lisp->_Roots._AllObjectFiles.\n"
+      "          As of May 2, 2021 only ELF files work with the gdb JIT API - so this wouldn't work on macOS\n");
+  abort();
+};
+};
 namespace core {
 
-void initialize_debugging() {
-  CoreDefun(clibBacktrace);
-  CoreDefun(lowLevelBacktrace);
-  Defun(framePointers);
-  SYMBOL_EXPORT_SC_(CorePkg, printCurrentIhsFrameEnvironment);
-  Defun(printCurrentIhsFrameEnvironment);
+DOCGROUP(clasp);
+CL_DEFUN std::string core__safe_repr(core::T_sp obj) {
+  std::string result = dbg_safe_repr((uintptr_t)obj.raw_());
+  return result;
 }
-};
+
+DOCGROUP(clasp);
+CL_DEFUN Pointer_sp core__objectAddress(core::T_sp obj) {
+  Pointer_sp result = Pointer_O::create(&*obj);
+  return result;
+}
+
+}; // namespace core

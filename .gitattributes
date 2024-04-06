@@ -1,0 +1,2 @@
+src/lisp/swank-loader-docker.lisp linguist-language=Common Lisp
+tools-for-build/cleavir-file-list.lisp linguist-language=Common Lisp

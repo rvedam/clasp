@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -55,26 +55,14 @@ THE SOFTWARE.
 #include <clasp/clbind/cl_include.h>
 
 #include <clasp/clbind/clbind.h>
-#include <clasp/clbind/symbolTable.h>
+#include <clasp/core/symbolTable.h>
 #include <clasp/clbind/class_registry.h>
 #include <clasp/clbind/class_rep.h>
-//#include <clasp/clbind/detail/operator_id.h>
+// #include <clasp/clbind/detail/operator_id.h>
 #include <clasp/core/wrappers.h>
 namespace clbind {
 
 CLBIND_API void push_instance_metatable();
-EXPOSE_CLASS(clbind, ClassRegistry_O);
-
-void ClassRegistry_O::exposeCando(core::Lisp_sp lisp) {
-  _G();
-  core::class_<ClassRegistry_O>();
-}
-void ClassRegistry_O::exposePython(core::Lisp_sp lisp) {
-  _G();
-#ifdef USEBOOSTPYTHON
-  PYTHON_CLASS(CorePkg, ClassRegistry, "", "", _lisp);
-#endif
-}
 
 #if 0
     namespace {
@@ -82,7 +70,7 @@ void ClassRegistry_O::exposePython(core::Lisp_sp lisp) {
 
         int create_cpp_class_metatable()
         {
-            IMPLEMENT_MEF(BF("create_cpp_class_metatable"));
+            IMPLEMENT_MEF("create_cpp_class_metatable");
 #if 0
             cl_newtable(L);
 
@@ -112,7 +100,7 @@ void ClassRegistry_O::exposePython(core::Lisp_sp lisp) {
             cl_rawset(L, -3);
 
             cl_pushstring(L, "__newindex");
-            cl_pushcclosure(L, &class_rep::cl_settable_dispatcher, 0);
+            cl_pushcclosure(L, &class_rep::cl__settable_dispatcher, 0);
             cl_rawset(L, -3);
 
             return clL_ref(L, CL_REGISTRYINDEX);
@@ -121,7 +109,7 @@ void ClassRegistry_O::exposePython(core::Lisp_sp lisp) {
 
         int create_cl_class_metatable()
         {
-            IMPLEMENT_MEF(BF("create_cl_class_metatable"));
+            IMPLEMENT_MEF("create_cl_class_metatable");
 #if 0
             cl_newtable(L);
 
@@ -140,7 +128,7 @@ void ClassRegistry_O::exposePython(core::Lisp_sp lisp) {
             cl_rawset(L, -3);
 
             cl_pushstring(L, "__newindex");
-            cl_pushcclosure(L, &class_rep::cl_settable_dispatcher, 0);
+            cl_pushcclosure(L, &class_rep::cl__settable_dispatcher, 0);
             cl_rawset(L, -3);
 
             cl_pushstring(L, "__call");
@@ -169,22 +157,25 @@ ClassRegistry_sp ClassRegistry_O::get_registry() {
   return gc::As<ClassRegistry_sp>(clbind::_sym_STARtheClassRegistrySTAR->symbolValue());
 }
 
-core::Integer_sp type_id_toClassRegistryKey(type_id const &info) {
-  mpz_class zz((uintptr_t)(const_cast<void *>(static_cast<const void *>(info.get_type_info()))));
+core::Integer_sp type_id_toClassRegistryKey(type_id const& info) {
+  mpz_class zz(GMP_ULONG((uintptr_t)(const_cast<void*>(static_cast<const void*>(info.get_type_info())))));
   core::Integer_sp p = core::Integer_O::create(zz);
   return p;
 }
 
-void ClassRegistry_O::add_class(type_id const &info, ClassRep_sp crep) {
+void ClassRegistry_O::add_class(type_id const& info, ClassRep_sp crep) {
   core::Integer_sp key = type_id_toClassRegistryKey(info);
-  ASSERTF(!this->m_classes->contains(key),
-          BF("You are trying to register the class %s twice") % info.name());
+  // ASSERTF(!this->m_classes->contains(key), "You are trying to register the class {} twice", info.name());
   this->m_classes->setf_gethash(key, crep);
 }
 
-ClassRep_sp ClassRegistry_O::find_class(type_id const &info) const {
+ClassRep_sp ClassRegistry_O::find_class(type_id const& info) const {
   core::Integer_sp key = type_id_toClassRegistryKey(info);
-  return gc::As<ClassRep_sp>(this->m_classes->gethash(key, _Nil<ClassRep_O>()));
+  core::T_sp value = this->m_classes->gethash(key, nil<core::T_O>());
+  if (value.nilp()) {
+    SIMPLE_ERROR("Could not find class for typeid: {} name: {}", _rep_(key), info.name());
+  }
+  return gc::As<ClassRep_sp>(value);
 }
 
 } // namespace clbind

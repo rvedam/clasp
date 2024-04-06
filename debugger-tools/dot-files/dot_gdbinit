@@ -1,0 +1,18 @@
+source -s -v debugger-tools/gdb-loader.py
+
+set pagination off
+
+#b core__gdb
+#b cl__error
+handle SIGPWR nostop noprint
+handle SIGXCPU nostop noprint
+handle SIGXFSZ nostop noprint
+handle SIGSEGV nostop noprint
+
+set python print-stack full
+
+
+#set complaints 100
+
+#set confirm off
+

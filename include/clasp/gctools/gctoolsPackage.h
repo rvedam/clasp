@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: gctoolsPackage.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -25,24 +27,18 @@ THE SOFTWARE.
 */
 /* -^- */
 
-#ifndef gctoolsCando_H
-#define gctoolsCando_H
-
 #include <clasp/core/common.h>
 #include <clasp/gctools/gctoolsPackage.fwd.h>
-
-NAMESPACE_PACKAGE_ASSOCIATION(gctools, GcToolsPkg, "GCTOOLS")
 
 namespace gctools {
 
 extern bool _GlobalDebugAllocations;
 
-class GcToolsExposer : public core::Exposer {
+class GcToolsExposer_O : public core::Exposer_O {
 private:
 public:
-  DISABLE_NEW();
-  GcToolsExposer(core::Lisp_sp lisp) : Exposer(lisp, GcToolsPkg){};
-  virtual void expose(core::Lisp_sp lisp, WhatToExpose what) const;
+  GcToolsExposer_O(core::LispPtr lisp) : Exposer_O(lisp, GcToolsPkg){};
+  virtual void expose(core::LispPtr lisp, WhatToExpose what) const;
 };
 
 class TestingClass {
@@ -51,11 +47,9 @@ public:
   TestingClass() : x(0){};
   TestingClass(int i) : x(i){};
   void dump() const { printf("%d ", x); };
-  DECLARE_onHeapScanGCRoots();
 };
 
-void af_cleanup();
+void gctools__cleanup(bool verbose);
 
 void initialize_bootstrap_kinds();
-};
-#endif
+}; // namespace gctools

@@ -24,66 +24,124 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
-#include <boost/format.hpp>
+#include <clasp/core/foundation.h>
 #include <clasp/core/common.h>
 #include <clasp/core/numbers.h>
 #include <clasp/core/symbol.h>
-#include <clasp/core/conditions.h>
 #include <clasp/core/hashTable.h>
+#include <clasp/core/lispStream.fwd.h>
+#include <clasp/core/print.h>
 #include <clasp/core/random.h>
 #include <clasp/core/wrappers.h>
 
 namespace core {
 
-#define ARGS_RandomState_O_make "(&optional state)"
-#define DECL_RandomState_O_make ""
-#define DOCS_RandomState_O_make "getUniversalTime"
-RandomState_sp RandomState_O::make(T_sp state) {
+CL_LAMBDA(&optional state);
+CL_PKG_NAME(ClPkg, make-random-state);
+DOCGROUP(clasp);
+CL_DEFUN RandomState_sp RandomState_O::make(T_sp state) {
   if (RandomState_sp rs = state.asOrNull<RandomState_O>()) {
     return RandomState_O::create(rs);
   } else if (state.nilp()) {
     RandomState_sp currentState = gc::As<RandomState_sp>(cl::_sym_STARrandom_stateSTAR->symbolValue());
     return RandomState_O::create(currentState);
   } else if (state == _lisp->_true()) {
-    return RandomState_O::create();
+    return RandomState_O::create_random();
   }
-  SIMPLE_ERROR(BF("Illegal argument for make-random-state: ~a") % _rep_(state));
+  TYPE_ERROR(state, Cons_O::createList(cl::_sym_or, cl::_sym_RandomState_O, cl::_sym_null,
+                                       Cons_O::createList(cl::_sym_eql, cl::_sym_T_O)));
 }
 
-#define ARGS_cl_random "(olimit &optional (random-state cl:*random-state*))"
-#define DECL_cl_random ""
-#define DOCS_cl_random "random"
-T_sp cl_random(T_sp olimit, RandomState_sp random_state) {
+// sbcl says this type is needed for random  (OR (SINGLE-FLOAT (0.0)) (DOUBLE-FLOAT (0.0d0)) (INTEGER 1))
+// better use just float instead of using all subtypes
+#define TYPE_ERROR_cl_random(_datum_)                                                                                              \
+  TYPE_ERROR(_datum_, Cons_O::createList(cl::_sym_or, Cons_O::createList(cl::_sym_Integer_O, make_fixnum(1)),                      \
+                                         Cons_O::createList(cl::_sym_float, Cons_O::createList(clasp_make_single_float(0.0)))))
+
+CL_LAMBDA(olimit &optional (random-state cl:*random-state*));
+CL_DECLARE();
+CL_DOCSTRING(R"dx(random)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__random(Number_sp olimit, RandomState_sp random_state) {
+  // olimit---a positive integer, or a positive float.
+  // Fixing #292
   if (olimit.fixnump()) {
-    boost::random::uniform_int_distribution<> range(0, olimit.unsafe_fixnum() - 1);
-    return make_fixnum(range(random_state->_Producer));
+    gc::Fixnum n = olimit.unsafe_fixnum();
+    if (n > 0) {
+      std::uniform_int_distribution<uint64_t> range(0, n - 1);
+      return make_fixnum(range(random_state->_Producer._value));
+    } else
+      TYPE_ERROR_cl_random(olimit);
   } else if (gc::IsA<Bignum_sp>(olimit)) {
-    IMPLEMENT_MEF(BF("Implement generating Bignum random numbers"));
+    Bignum_sp gbn = gc::As_unsafe<Bignum_sp>(olimit);
+    mp_size_t len = gbn->length();
+    if (len < 1)
+      TYPE_ERROR_cl_random(olimit); // positive only
+    mp_limb_t res[len];
+    const mp_limb_t minlimb = std::numeric_limits<mp_limb_t>::min();
+    const mp_limb_t maxlimb = std::numeric_limits<mp_limb_t>::max();
+    std::uniform_int_distribution<mp_limb_t> range(minlimb, maxlimb);
+    for (mp_size_t i = 0; i < len; ++i)
+      res[i] = range(random_state->_Producer._value);
+    // FIXME: We KLUDGE the range by doing mod (basically).
+    // This will in general result in deviations from a truly uniform
+    // distribution.
+    // For comparison, the native mpz code tries 80 rounds of rejection
+    // sampling, and then gives up and uses mod.
+    // FIXME: Also we could avoid actually consing a bignum for the
+    // intermediate here.
+    BIGNUM_NORMALIZE(len, res);
+    return cl__mod(bignum_result(len, res), gbn);
   } else if (DoubleFloat_sp df = olimit.asOrNull<DoubleFloat_O>()) {
-    boost::random::uniform_real_distribution<> range(0.0, df->get());
-    return DoubleFloat_O::create(range(random_state->_Producer));
+    if (df->get() > 0.0) {
+      std::uniform_real_distribution<> range(0.0, df->get());
+      return DoubleFloat_O::create(range(random_state->_Producer._value));
+    } else
+      TYPE_ERROR_cl_random(olimit);
   } else if (olimit.single_floatp()) {
     float flimit = olimit.unsafe_single_float();
-    boost::random::uniform_real_distribution<> range(0.0, flimit);
-    return clasp_make_single_float(range(random_state->_Producer));
+    if (flimit > 0.0f) {
+      std::uniform_real_distribution<> range(0.0, flimit);
+      return clasp_make_single_float(range(random_state->_Producer._value));
+    } else
+      TYPE_ERROR_cl_random(olimit);
   }
-  SIMPLE_ERROR(BF("Illegal limit for random"));
+  TYPE_ERROR_cl_random(olimit);
 }
 
-EXPOSE_CLASS(core, RandomState_O);
-
-void RandomState_O::exposeCando(core::Lisp_sp lisp) {
-  core::class_<RandomState_O>();
-  af_def(ClPkg, "make-random-state", &RandomState_O::make, ARGS_RandomState_O_make, DECL_RandomState_O_make, DOCS_RandomState_O_make);
-  af_def(ClPkg, "random", &cl_random, ARGS_cl_random, DECL_cl_random, DOCS_cl_random);
+// Return a double, sampled from a unit uniform distribution.
+// This used to be done through a totally different random mechanism, and is now
+// only here to be compatible with cando (chem/energySketchNonbond.cc).
+double randomNumber01() {
+  RandomState_sp random_state = gc::As<RandomState_sp>(cl::_sym_STARrandom_stateSTAR->symbolValue());
+  std::uniform_real_distribution<> range(0.0, 1.0);
+  return range(random_state->_Producer._value);
 }
 
-void RandomState_O::exposePython(core::Lisp_sp lisp) {
-  _G();
-#ifdef USEBOOSTPYTHON
-  PYTHON_CLASS(CurrentPkg, RandomState, "", "", _lisp);
-#endif
+// Like the above, including being defined for compatibility (chem/twister.cc),
+// but samples a normal distribution with mean 0 and stddev 1.
+double randomNumberNormal01() {
+  RandomState_sp random_state = gc::As<RandomState_sp>(cl::_sym_STARrandom_stateSTAR->symbolValue());
+  std::normal_distribution<> gauss(0.0, 1.0);
+  return gauss(random_state->_Producer._value);
 }
-};
+
+void RandomState_O::__write__(T_sp stream) const {
+  bool readably = clasp_print_readably();
+  if (readably) {
+    this->__writeReadable__(stream);
+    return;
+  }
+  clasp_write_string("#<RANDOM-STATE>", stream);
+}
+
+void RandomState_O::__writeReadable__(T_sp stream) const {
+  clasp_write_string("#.(core:random-state-set (make-random-state t) \"", stream);
+  std::string state = this->random_state_get();
+  clasp_write_string(state, stream);
+  clasp_write_string("\")", stream);
+}
+
+}; // namespace core

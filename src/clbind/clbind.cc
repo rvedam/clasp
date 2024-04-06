@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -27,11 +27,6 @@ THE SOFTWARE.
 
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
-#include <clasp/clbind/symbolTable.h>
+#include <clasp/core/symbolTable.h>
 #include <clasp/clbind/clbind.h>
 #include <clasp/core/wrappers.h>
-
-namespace clbind {
-
-//    map<const type_info*,core::Symbol_sp> 	globalRttiToClassSymbol;
-};

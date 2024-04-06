@@ -30,7 +30,8 @@ THE SOFTWARE.
 #include <clasp/core/lispStream.h>
 #include <clasp/core/symbolTable.h>
 #include <clasp/core/arguments.h>
-#include <clasp/core/str.h>
+#include <clasp/core/array.h>
+#include <clasp/core/bformat.h>
 #include <clasp/core/lispStream.h>
 #include <clasp/core/lambdaListHandler.h>
 #include <clasp/core/primitives.h>
@@ -38,192 +39,227 @@ THE SOFTWARE.
 #include <clasp/core/pathname.h>
 #include <clasp/core/lispReader.h>
 #include <clasp/core/evaluator.h>
+#include <clasp/core/compiler.h>
 #include <clasp/gctools/gctoolsPackage.h>
 #include <clasp/core/predicates.h>
 #include <clasp/core/wrappers.h>
 
 namespace core {
 
-#define ARGS_af_loadSource "(source &optional verbose print external-format)"
-#define DECL_af_loadSource ""
-#define DOCS_af_loadSource "loadSource"
-T_sp af_loadSource(T_sp source, bool verbose, bool print, T_sp externalFormat) {
-  _G();
-  T_sp strm;
-  void *strmPointer;
-  if (cl_streamp(source)) {
-    strm = source;
-    if (!clasp_input_stream_p(strm)) {
-      SIMPLE_ERROR(BF("Stream must be an input stream"));
-    }
-  } else {
-    strm = cl_open(source,
-                   kw::_sym_input,
-                   cl::_sym_character,
-                   _Nil<T_O>(), false,
-                   _Nil<T_O>(), false,
-                   kw::_sym_default,
-                   _Nil<T_O>());
-    if (strm.nilp())
-      return _Nil<T_O>();
-    //    printf("%s:%d  Just created strm@%p  tagged-pointer: %p\n", __FILE__, __LINE__, &strm, strm.raw_());
-    strmPointer = &(*strm);
-  }
-  /* Define the source file */
-  SourceFileInfo_sp sfi = core_sourceFileInfo(source);
-  DynamicScopeManager scope(_sym_STARcurrentSourceFileInfoSTAR, sfi);
-  Pathname_sp pathname = cl_pathname(source);
-  ASSERTF(pathname.objectp(), BF("Problem getting pathname of [%s] in loadSource") % _rep_(source));
-  ;
-  Pathname_sp truename = cl_truename(source);
-  ASSERTF(truename.objectp(), BF("Problem getting truename of [%s] in loadSource") % _rep_(source));
-  ;
-  scope.pushSpecialVariableAndSet(cl::_sym_STARloadPathnameSTAR, pathname);
-  scope.pushSpecialVariableAndSet(cl::_sym_STARloadTruenameSTAR, truename);
-  /* Create a temporary closure to load the source */
-  SourcePosInfo_sp spi = SourcePosInfo_O::create(sfi->fileHandle(), 0, 0, 0);
+SYMBOL_SC_(CorePkg, eof);
+
+T_sp load_stream(T_sp strm, bool print) {
   while (true) {
+    // Required to get source position correct. FIXME
+    cl__peek_char(_lisp->_true(), strm, nil<T_O>(), nil<T_O>(), nil<T_O>());
+    DynamicScopeManager scope(_sym_STARcurrentSourcePosInfoSTAR, clasp_simple_input_stream_source_pos_info(strm));
     bool echoReplRead = _sym_STARechoReplReadSTAR->symbolValue().isTrue();
-    DynamicScopeManager innerScope(_sym_STARsourceDatabaseSTAR, SourceManager_O::create());
-    //    printf("%s:%d  Pushing stream source pos for strm@%p   tagged-ptr: %p\n", __FILE__, __LINE__, &strm, strm.raw_());
-    innerScope.pushSpecialVariableAndSet(_sym_STARcurrentSourcePosInfoSTAR, core_inputStreamSourcePosInfo(strm));
-    T_sp x = read_lisp_object(strm, false, _Unbound<T_O>(), false);
-    if (x.unboundp())
+    T_sp x = cl__read(strm, nil<T_O>(), _sym_eof, nil<T_O>());
+    if (x == _sym_eof)
       break;
-    _sym_STARcurrentSourcePosInfoSTAR->setf_symbolValue(core_walkToFindSourcePosInfo(x, _sym_STARcurrentSourcePosInfoSTAR->symbolValue()));
     if (echoReplRead) {
-      _lisp->print(BF("Read: %s\n") % _rep_(x));
+      clasp_write_string(fmt::format("Read: {}\n", _rep_(x)));
     }
     if (x.number_of_values() > 0) {
-      //                printf("%s:%d  ;; -- read- %s\n", __FILE__, __LINE__, _rep_(x).c_str() );
-      if (print) {
-        _lisp->print(BF(";; -- read- %s\n") % _rep_(x));
-      };
-      eval::funcall(core::_sym_STAReval_with_env_hookSTAR->symbolValue(), x, _Nil<T_O>());
-      //                gctools::af_cleanup();
+      if (print)
+        clasp_write_string(fmt::format(";; -read- {}\n", _rep_(x)));
+      eval::funcall(core::_sym_STAReval_with_env_hookSTAR->symbolValue(), x, nil<T_O>());
     }
   }
-  //  printf("%s:%d  closing strm@%p  tagged-ptr: %p\n", __FILE__, __LINE__, &strm, strm.raw_());
-  cl_close(strm);
+  cl__close(strm);
   return _lisp->_true();
 }
 
-/*! Translated from from ecl::load.d */
-#define ARGS_af_load "(source &key (verbose *load-verbose*) (print *load-print*) (if-does-not-exist :error) (external-format :default) (search-list core::*load-search-list*))"
-#define DECL_af_load ""
-#define DOCS_af_load "CLHS: load"
-T_sp af_load(T_sp source, T_sp verbose, T_sp print, T_sp if_does_not_exist, T_sp external_format, T_sp search_list) {
+CL_LAMBDA(source &optional verbose print external-format skip-shebang);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(loadSource)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__load_source(T_sp source, bool verbose, bool print, core::T_sp externalFormat, bool skipShebang) {
+  T_sp strm;
+  if (source.nilp()) {
+    SIMPLE_ERROR("{} was called with NIL as the source filename", __FUNCTION__);
+  }
+  T_sp final_format;
+  if (externalFormat.nilp())
+    final_format = kw::_sym_default;
+  else
+    final_format = externalFormat;
+  strm = cl__open(source, StreamDirection::input, cl::_sym_character, StreamIfExists::nil, false, StreamIfDoesNotExist::nil, false,
+                  final_format, nil<T_O>());
+  if (strm.nilp())
+    return nil<T_O>();
+
+  if (source.nilp())
+    SIMPLE_ERROR("{} was about to pass nil to pathname", __FUNCTION__);
+  Pathname_sp pathname = cl__pathname(source);
+  ASSERTF(pathname.objectp(), "Problem getting pathname of [{}] in loadSource", _rep_(source));
+  Pathname_sp truename = cl__truename(source);
+  ASSERTF(truename.objectp(), "Problem getting truename of [{}] in loadSource", _rep_(source));
+  DynamicScopeManager scope(cl::_sym_STARloadPathnameSTAR, pathname);
+  DynamicScopeManager scope2(cl::_sym_STARloadTruenameSTAR, truename);
+
+  if (skipShebang) {
+    if (stream_peek_char(strm) == '#') {
+      stream_read_char(strm);
+      if (stream_peek_char(strm) == '!') {
+        cl__read_line(strm);
+      } else {
+        stream_unread_char(strm, '#');
+      }
+    }
+  }
+
+  return load_stream(strm, print);
+}
+
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__load_no_package_set(T_sp lsource, T_sp verbose, T_sp print, T_sp if_does_not_exist, T_sp external_format,
+                                        T_sp search_list) {
   Pathname_sp pathname;
   T_sp pntype;
   T_sp hooks;
   T_sp filename;
-  T_sp function = _Nil<T_O>();
+  T_sp function = nil<T_O>();
   T_sp ok;
-  bool not_a_filename = false;
-
-  //        printf("%s:%d af_load source= %s\n", __FILE__, __LINE__, _rep_(source).c_str());
-
-  /* If source is a stream, read conventional lisp code from it */
-  if (cl_streamp(source)) {
-    /* INV: if "source" is not a valid stream, file.d will complain */
-    filename = source;
-    function = _Nil<T_O>();
-    not_a_filename = true;
-    goto NOT_A_FILENAME;
+  T_sp msource = lsource;
+  //        printf("%s:%d cl__load source= %s\n", __FILE__, __LINE__, _rep_(source).c_str());
+  if (verbose.notnilp()) {
+    clasp_write_string(fmt::format(";;; Loading {}\n", _rep_(lsource)));
   }
-  /* INV: coerce_to_file_pathname() creates a fresh new pathname object */
-  source = af_mergePathnames(source);
-  //        printf("%s:%d af_load after mergePathnames source= %s\n", __FILE__, __LINE__, _rep_(source).c_str());
 
-  pathname = af_coerceToFilePathname(source);
+  /* If source is a stream, read source from it. Don't rebind load-truename or anything.
+   * FIXME: Hypothetically we could load FASL streams directly as well. */
+  if (cl__streamp(lsource))
+    return load_stream(lsource, print.notnilp());
+
+  // lsource must be a pathname, so
+  msource = cl__merge_pathnames(lsource);
+  if (msource.nilp()) {
+    SIMPLE_ERROR(
+        ("About to call core__coerce_to_file_pathname with NIL which was returned from cl__merge_pathnames when passed %s"),
+        _rep_(lsource));
+  }
+  pathname = core__coerce_to_file_pathname(msource);
+  if (pathname.nilp()) {
+    SIMPLE_ERROR("core__coerce_to_file_pathname returned NIL for {}", _rep_(lsource));
+  }
+
   pntype = pathname->_Type;
 
-  filename = _Nil<T_O>();
-  hooks = af_symbolValue(ext::_sym_STARloadHooksSTAR);
-  if (pathname->_Directory.nilp() &&
-      pathname->_Host.nilp() &&
-      pathname->_Device.nilp() &&
-      !search_list.nilp()) {
+  filename = nil<T_O>();
+  hooks = cl__symbol_value(core::_sym_STARloadHooksSTAR);
+  if (pathname->_Directory.nilp() && pathname->_Host.nilp() && pathname->_Device.nilp() && !search_list.nilp()) {
     for (; search_list.notnilp(); search_list = oCdr(search_list)) {
       T_sp d = oCar(search_list);
-      T_sp f = af_mergePathnames(pathname, d);
-      T_sp ok = af_load(f, verbose, print, _Nil<T_O>(), external_format, _Nil<T_O>());
+      T_sp f = cl__merge_pathnames(pathname, d);
+      T_sp ok = cl__load(f, verbose, print, nil<T_O>(), external_format, nil<T_O>());
       if (!ok.nilp()) {
         return ok;
       }
     }
   }
+  filename = core__coerce_to_file_pathname(pathname);
+  T_sp kind = core__file_kind(gc::As<Pathname_sp>(filename), true);
+  if (kind == kw::_sym_directory) {
+    ok = core__load_binary_directory(filename, verbose, print, external_format);
+    if (ok.nilp()) {
+      SIMPLE_ERROR("LOAD: Could not load file {}", _rep_(filename));
+    }
+    return _lisp->_true();
+  }
   if (!pntype.nilp() && (pntype != kw::_sym_wild)) {
     /* If filename already has an extension, make sure
-	       that the file exists */
-    T_sp kind;
-    filename = af_coerceToFilePathname(pathname);
-    kind = af_file_kind(gc::As<Pathname_sp>(filename), true);
+               that the file exists */
+    // Test if pathname is nil is above
+    if (pathname.nilp()) {
+      SIMPLE_ERROR("In {} - about to pass NIL to core__coerce_to_file_pathname from {}", __FUNCTION__, _rep_(lsource));
+    }
+    filename = core__coerce_to_file_pathname(pathname);
     if (kind != kw::_sym_file && kind != kw::_sym_special) {
-      filename = _Nil<T_O>();
+      filename = nil<T_O>();
     } else {
-      function = _Nil<T_O>();
-      if (cl_consp(hooks)) {
-        function = oCdr(gc::As<Cons_sp>(hooks)->assoc(pathname->_Type,
-                                                      _Nil<T_O>(),
-                                                      cl::_sym_string_EQ_,
-                                                      _Nil<T_O>()));
+      function = nil<T_O>();
+      T_sp magic = nil<T_O>();
+      for (T_sp _hooks = hooks; _hooks.notnilp(); _hooks = oCdr(_hooks)) {
+        T_sp key = oCaar(_hooks);
+        if (gc::IsA<String_sp>(key)) {
+          if (cl__equalp(key, pathname->_Type)) {
+            function = oCdar(_hooks);
+            break;
+          }
+        } else {
+          if (magic.nilp()) {
+            T_sp stream = cl__open(pathname, StreamDirection::input, ext::_sym_byte8, StreamIfExists::nil, false,
+                                   StreamIfDoesNotExist::nil, false, external_format, nil<T_O>());
+            uint8_t bytes[4];
+            magic = clasp_make_fixnum((stream_read_byte8(stream, bytes, 4) == 4)
+                                          ? (((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) |
+                                             ((uint32_t)bytes[3] << 0))
+                                          : 0);
+            cl__close(stream);
+          }
+          if (cl__equalp(key, magic)) {
+            function = oCdar(_hooks);
+            break;
+          }
+        }
       }
     }
   } else {
-    for (; hooks.notnilp(); hooks = oCdr(hooks)) {
-      /* Otherwise try with known extensions until a matching
-		   file is found */
-      T_sp kind;
-      filename = pathname;
-      pathname->_Type = oCaar(hooks);
-      function = oCdar(hooks);
-      kind = af_file_kind(pathname, true);
-      if (kind == kw::_sym_file || kind == kw::_sym_special)
-        break;
-      else
-        filename = _Nil<T_O>();
+    for (T_sp _hooks = hooks; _hooks.notnilp(); _hooks = oCdr(_hooks)) {
+      if (gc::IsA<String_sp>(oCaar(_hooks))) {
+        /* Otherwise try with known extensions until a matching
+                     file is found */
+        T_sp kind;
+        filename = pathname;
+        pathname->_Type = oCaar(_hooks);
+        function = oCdar(_hooks);
+        kind = core__file_kind(pathname, true);
+        if (kind == kw::_sym_file || kind == kw::_sym_special)
+          break;
+        else
+          filename = nil<T_O>();
+      }
     }
   };
   if (filename.nilp()) {
     if (if_does_not_exist.nilp())
-      return _Nil<T_O>();
+      return nil<T_O>();
     else {
-      CANNOT_OPEN_FILE_ERROR(source);
+      CANNOT_OPEN_FILE_ERROR(lsource);
     }
   }
-NOT_A_FILENAME:
-  if (verbose.notnilp()) {
-    eval::funcall(cl::_sym_format, _lisp->_true(),
-                  Str_O::create("~&;;; Loading ~s~%"),
-                  filename);
-  }
-  DynamicScopeManager scope(cl::_sym_STARpackageSTAR, af_symbolValue(cl::_sym_STARpackageSTAR));
-  scope.pushSpecialVariableAndSet(cl::_sym_STARreadtableSTAR, af_symbolValue(cl::_sym_STARreadtableSTAR));
-  scope.pushSpecialVariableAndSet(cl::_sym_STARloadPathnameSTAR, not_a_filename ? _Nil<T_O>() : source);
-  T_sp truename = cl_truename(filename);
-  scope.pushSpecialVariableAndSet(cl::_sym_STARloadTruenameSTAR, not_a_filename ? _Nil<T_O>() : truename);
-  if (!not_a_filename)
-    filename = truename;
+
   if (!function.nilp()) {
+    /* We only bind these here rather than outside the condition because core:load-source,
+     * being an exported function, has to bind them itself. */
+    DynamicScopeManager scope(cl::_sym_STARloadPathnameSTAR, msource);
+    T_sp truename = cl__truename(filename);
+    DynamicScopeManager scope2(cl::_sym_STARloadTruenameSTAR, truename);
     ok = eval::funcall(function, filename, verbose, print, external_format);
   } else {
-    SIMPLE_ERROR(BF("LOAD could not identify type of file for loading %s") % _rep_(filename));
+    ok = core__load_source(filename, verbose.isTrue(), print.isTrue(), external_format, false);
   }
   if (ok.nilp()) {
-    SIMPLE_ERROR(BF("LOAD: Could not load file %s") % _rep_(filename));
-  }
-  if (print.notnilp()) {
-    eval::funcall(cl::_sym_format, _lisp->_true(),
-                  Str_O::create("~&;;; Loading ~s~%"),
-                  filename);
+    SIMPLE_ERROR("LOAD: Could not load file {}", _rep_(filename));
   }
   return _lisp->_true();
 }
 
-void initialize_load() {
-  SYMBOL_EXPORT_SC_(CorePkg, loadSource);
-  Defun(loadSource);
-  Defun(load);
-}
+/*! Translated from from ecl::load.d */
+CL_LAMBDA(source &key (verbose *load-verbose*) (print *load-print*) (if-does-not-exist :error) (external-format :default) (search-list core::*load-search-list*));
+CL_DECLARE();
+CL_DOCSTRING(R"dx(CLHS: load)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__load(T_sp source, T_sp verbose, T_sp print, T_sp if_does_not_exist, T_sp external_format, T_sp search_list) {
+  if (source.nilp()) {
+    TYPE_ERROR(source, Cons_O::createList(cl::_sym_stream, cl::_sym_Pathname_O, cl::_sym_string));
+  }
+  DynamicScopeManager scope(cl::_sym_STARpackageSTAR, cl__symbol_value(cl::_sym_STARpackageSTAR));
+  DynamicScopeManager scope2(cl::_sym_STARreadtableSTAR, cl__symbol_value(cl::_sym_STARreadtableSTAR));
+  return core__load_no_package_set(source, verbose, print, if_does_not_exist, external_format, search_list);
 };
+
+SYMBOL_EXPORT_SC_(CorePkg, loadSource);
+
+}; // namespace core

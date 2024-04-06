@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: bundle.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,71 +25,50 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef Bundle_H //[
-#define Bundle_H
 
 #include <stdio.h>
 #include <string>
 #include <vector>
 #include <set>
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/pathname.fwd.h>
 #include <clasp/core/sourceFileInfo.fwd.h>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 namespace core {
+
+struct BundleDirectories {
+  std::filesystem::path _StartupWorkingDir;
+  std::filesystem::path _ExecutableDir;
+  std::filesystem::path _SysDir;
+  std::filesystem::path _GeneratedDir;
+  std::filesystem::path _IncludeDir;
+  std::filesystem::path _LibDir;
+  std::filesystem::path _QuicklispDir;
+};
 
 /*! Maintains the file paths to the different directories of the Cando bundle
  */
 class Bundle {
 #if defined(USE_MPS)
-  friend mps_res_t globals_scan(mps_ss_t ss, void *p, size_t s);
+  friend mps_res_t globals_scan(mps_ss_t ss, void* p, size_t s);
 #endif
 
-private:
+public:
   bool _Initialized;
-  boost_filesystem::path _RootDir;
-  boost_filesystem::path _AppDir;
-  boost_filesystem::path _ResourcesDir;
-  boost_filesystem::path _DatabasesDir;
-  boost_filesystem::path _ScriptsDir;
-  boost_filesystem::path _LispDir;
-  boost_filesystem::path _LibDir;
-  boost_filesystem::path _StartupWorkingDir;
+  BundleDirectories* _Directories;
 
-public:
-  /*! Initialize the bundle and set up all the paths
-     */
 private:
-  boost_filesystem::path findAppDir(const string &argv0, const string &cwd, const string &env);
-  void findSubDirectories(boost_filesystem::path p);
+  void findExecutableDir(const string& argv0, bool verbose = false);
+  std::string deduceArgv0(const std::string& raw_argv0);
 
 public:
-  void initializeStartupWorkingDirectory();
-  void initialize(const string &argv0, const string &appPathEnvironmentVariable);
-
-  boost_filesystem::path getRootDir();
-  boost_filesystem::path getAppDir();
-  boost_filesystem::path getResourcesDir();
-  boost_filesystem::path getDatabasesDir();
-  boost_filesystem::path getScriptsDir();
-  boost_filesystem::path getLispDir();
-  boost_filesystem::path getLibDir();
-  boost_filesystem::path getStartupWorkingDir();
-
-  Pathname_sp getRootPathname();
-  Pathname_sp getSysPathname();
-  Pathname_sp getAppContentsPathname();
-  Pathname_sp getAppContentsResourcesPathname();
-
   string describe();
-  Bundle();
+  Bundle(const string& argv0);
+
+  void setup_pathname_translations();
 
   virtual ~Bundle(){};
 };
 
-/*! Get the system bundle */
-//extern	Bundle&	bundle();
-};
-#endif //]
+}; // namespace core

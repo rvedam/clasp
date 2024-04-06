@@ -1,95 +1,106 @@
 # Clasp — Bringing Common Lisp and C++ Together
 
-## NOTE:  June 22, 2016 - Build the 'testing' branch of Clasp along with the <a href="https://github.com/drmeister/externals-clasp">externals-clasp</a> - for now.
+Clasp is a new [Common Lisp][] implementation that seamlessly interoperates with 
+C++ libraries and programs using [LLVM][] for compilation to native code. This 
+allows Clasp to take advantage of a vast array of preexisting libraries and 
+programs, such as out of the scientific computing ecosystem. Embedding them in a 
+Common Lisp environment allows you to make use of rapid prototyping, incremental 
+development, and other capabilities that make it a powerful language.
 
-## What Is This?
-Clasp is a new [Common Lisp](https://common-lisp.net/) implementation that seamlessly interoperates with C++ libraries and programs using [LLVM](http://llvm.org/) for compilation to native code. This allows Clasp to take advantage of a vast array of preexisting libraries and programs, such as out of the scientific computing ecosystem. Embedding them in a Common Lisp environment allows you to make use of rapid prototyping, incremental development, and other capabilities that make it a powerful language.
+For more information on using Clasp, see:
 
-## New Features
-* Clasp has a completely new, <a href="https://drmeister.wordpress.com/2015/07/30/timing-data-comparing-cclasp-to-c-sbcl-and-python/">optimizing/inlining compiler called cclasp!</a>
-* Fixnum, character and single-float types are immediate values.
-* General object pointers and cons pointers are tagged for speed.
-* Clbind library allows programmers to expose external C++ libraries.
-* Lots of bug fixes and stability improvements.
+* [Clasp Manual][]
+* [clbind Documentation][]
 
-## Getting Clasp
-Precompiled and prepackaged versions of Clasp are not yet available. 
+## Releases
 
-At the moment, Clasp is supported on Linux and Mac OS X. On these systems, you should be able to build it from source. In case you cannot get it to compile even with the instructions below, the quickest way to get help is to either [file an issue](#reporting-problems), or to [chat with us directly](#irc).
+See [Releases][] for current releases of Clasp.  For more information please
+see the [Release Notes][].
 
-Building on most systems will take around 4GB of RAM and ~2 hours with a relatively modern processor, so be prepared to watch a movie or do some other useful work until Clasp is all done.
+### Building Clasp
 
-### Building on Linux
-For most distributions that have the listed [dependencies](#external-dependencies) available as packages, the compilation should be straightforward. Simply clone Clasp and run `make` from the root of it.
+At the moment, Clasp is supported on Linux, Mac OS X and FreeBSD. On these 
+systems, you should be able to build it from source and you may be able to
+install using a package manager. See the [Wiki][] for more information.
 
-If the system is too dumb to find some of the dependencies or fails for other reasons, you might have to manually adjust configuration variables. For this, copy `local.config.template` to `local.config` and edit it as appropriate. If you lack the required dependencies, try [compiling with externals-clasp](#building-with-externals-clasp).
+In case things go wrong, the quickest way to get help is to either 
+[file an issue](#reporting-problems), or to [chat with us directly](#irc).
 
-The compilation output will be in the `build/clasp` directory. To launch Clasp, run `build/clasp/bin/clasp_boehm_o`.
+Building takes a lot of resources.  In parallel mode
+(`:parallel-build t` in config.sexp) you need more than 8 GB of RAM 
+and it will be 1-2 hours build time. If you have 8 GB of RAM you can turn off 
+the parallel build which will then run for a day or so.  Make sure to have some 
+paging space ("swapfile") configured.
 
-Clasp has been successfully built on
+There is also docker image [here](https://github.com/clasp-developers/clasp/pkgs/container/clasp).
 
-* **Ubuntu 14.04**, see [this wiki entry](https://github.com/drmeister/clasp/wiki/Building-Clasp-0.4-on-Ubuntu)
-* **Debian Jessie**
-* **Debian Sid**
-* **Debian Wheezy**
-* **OpenSuse 13.1**
-* **Gentoo**
-* **Arch**, currently requires downgrading Clang and LLVM to 3.6 .
+### Common Lisp Ecosystem Support
 
-### Building on OS X
-First you will need what is listed for OS X under the [dependencies](#external-dependencies). Next you need an additional step that is documented [on the wiki](https://github.com/drmeister/clasp/wiki/Building-Clasp-on-OS-X-requires-using-the-open-source-version-of-Clang). The rest of the procedure is the same as for [building with externals-clasp](#building-with-externals-clasp).
+Clasp supports the following major components:
 
-The compilation output will be in the `build/clasp` directory. To launch Clasp, run `build/clasp/MacOS/clasp_boehm_o`.
+* [SLIME](https://common-lisp.net/project/slime/)
+* [ASDF](https://common-lisp.net/project/asdf/)
+* [Quicklisp](https://www.quicklisp.org/beta/)
+* [CFFI](https://common-lisp.net/project/cffi/)
+* [Bordeaux-Threads](https://github.com/clasp-developers/clasp/issues/163)
+* [Unicode](https://github.com/clasp-developers/clasp/issues/164)
 
-### Building With Externals-Clasp
-If your system does not provide the [external dependencies](#external-dependencies) as required by Clasp, you can use this approach instead, which will compile them for you.
+Post on the issues or [contact us](#irc) if you're interested in changing that.
 
-Clone [externals-clasp](https://github.com/drmeister/externals-clasp) to a directory on your system. Next, create a `local.config` containing `export GCC_TOOLCHAIN = /usr` if you are on Linux and `export TOOLSET = clang` if you are on OS X. Next, simply run `make` from the root of it. This will take some time to complete; maybe play a round of pinball or [chat on IRC for a bit](#irc).
+## Contributing to Clasp
 
-The next step is building Clasp itself. For this, clone it to a different folder and copy the `local.config.template` file within it to `local.config`. Next, open it up and make sure to uncomment and adapt the `EXTERNALS_CLASP_DIR` line to point to the location where you compiled externals-clasp. Something like `export EXTERNALS_CLASP_DIR = /opt/externals-clasp`. Finally it's time to kick off the build process. Simply run `make` from the Clasp root.
-
-### External Dependencies
-#### Linux
-Simply install the appropriate packages with your package manager.
-
-* **llvm** 3.6
-* **clang** 3.6, including headers.
-* **boost**
-* **autoreconf** (dh-autoreconf on Ubuntu and Arch (AUR))
-* **gmp** 6.0.0, compiled with --enable-cxx
-* **expat** 2.0.1
-* **zlib** 1.2.8
-* **readline** 6.2
-
-#### OS X
-Use either [brew](http://brew.sh/) or [ports](https://www.macports.org/) to install the dependencies besides Xcode. Make sure the binaries are in your `PATH`.
-
-* **Xcode** 6.4
-* **Xcode command-line tools**
-* **automake**
-* **autoconf**
-* **libtool**
-* **pkg-config**
-
-## Common Lisp Ecosystem Support
-Clasp supports [SLIME](https://common-lisp.net/project/slime/), [ASDF](https://common-lisp.net/project/asdf/), and [Quicklisp](https://www.quicklisp.org/beta/). As such, development as in other Common Lisp implementations should be rather straight forward.
-
-Note that Clasp does not currently support several of the staple features such as [CFFI](https://github.com/drmeister/clasp/issues/162), [Bordeaux-Threads](https://github.com/drmeister/clasp/issues/163), and [Unicode](https://github.com/drmeister/clasp/issues/164).
+We very much welcome any kind of contribution to Clasp, even if it is just bug 
+finding and testing. A lot can be done all around the project, if you want to 
+dive into something large. See the [Contributing][] file for the few guidelines 
+we've set up around contributions.
 
 ## Reporting Problems
-Generally you can report problems in two fashions, either by [opening an issue ticket](https://github.com/drmeister/clasp/issues/new) or by [chatting with us directly](#irc). In both cases, though, you should have the following pieces handy in order for us to be able to help you out as quickly and painlessly as possible.
+
+Generally you can report problems in two fashions, either by opening a 
+[New Issue][] or by [chatting with us directly](#irc). In both cases, though, 
+you should have the following pieces handy in order for us to be able to help 
+you out as quickly and painlessly as possible:
 
 * Your operating system name and version.
-* The versions of the [external libraries](#external-dependencies) that you have installed.
+* The branch that you're using of Clasp.
 * A paste of the build log or failure point that you reached.
 * Patience.
 
 ## IRC
-Clasp has an IRC channel on [Freenode](https://freenode.net/) called [#clasp](irc://irc.freenode.net/#clasp). If you have questions, problems, suggestions, or generally would like to just hang out with us devs, come and stop by!
 
-## My Blog
+Clasp has an IRC channel on [Libera][] called [#clasp][]. If you have questions, 
+problems, suggestions, or generally would like to just hang out with us devs, 
+come and stop by!
 
-<a href="https://drmeister.wordpress.com">More details on Clasp.</a>
+## More on Clasp
+
+For more information on Clasp and the discussion around it, see the following 
+sites:
+
+* [Christian Schafmeister's blog](https://drmeister.wordpress.com)
+* [Hackernews](https://hn.algolia.com/?query=clasp&sort=byPopularity&prefix&page=0&dateRange=all&type=story)
+* [Reddit](https://www.reddit.com/r/lisp/search?q=clasp&restrict_sr=on)
+* [Google Tech Talks](https://www.youtube.com/watch?v=8X69_42Mj-g)
+* [ELS2016](https://www.youtube.com/watch?v=5bQhGS8V6dQ)
+* [Lessons Learned Implementing Common Lisp with LLVM](https://www.youtube.com/watch?v=mbdXeRBbgDM)
 
 ## Acknowledgments
-Clasp was supported by the Defense Threat Reduction Agency (DOD-DTRA) (HDTRA1-09-1-0009) the National Institutes of Health (NIH/NIGMS Grant number: 2R01GM067866-07A2) and the National Science Foundation (Grant number: 1300231).
+
+Clasp was supported by:
+
+* The Defense Threat Reduction Agency (DOD-DTRA) (HDTRA1-09-1-0009) 
+* The National Institutes of Health (NIH/NIGMS Grant number: 2R01GM067866-07A2) 
+* The National Science Foundation (Grant number: 1300231)
+
+[Wiki]: https://github.com/clasp-developers/clasp/wiki/
+[Cando Docker]: https://hub.docker.com/r/thirdlaw/cando
+[#clasp]: irc://irc.libera.chat/#clasp
+[Clasp Manual]: https://clasp-developers.github.io/manual.html
+[clbind Documentation]: https://clasp-developers.github.io/clbind-doc.html
+[Common Lisp]: https://common-lisp.net/
+[Contributing]: https://github.com/clasp-developers/clasp/blob/main/CONTRIBUTING.md
+[Libera]: https://libera.chat
+[LLVM]: http://llvm.org/
+[New Issue]: https://github.com/clasp-developers/clasp/issues/new
+[Release Notes]: https://github.com/clasp-developers/clasp/blob/main/RELEASE_NOTES.md
+[Releases]: https://github.com/clasp-developers/clasp/releases

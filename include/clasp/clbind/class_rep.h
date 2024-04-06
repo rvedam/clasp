@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: class_rep.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -46,135 +48,92 @@ THE SOFTWARE.
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 // OR OTHER DEALINGS IN THE SOFTWARE.
 
-#ifndef CLBIND_CLASS_REP_HPP_INCLUDED
-#define CLBIND_CLASS_REP_HPP_INCLUDED
-
 #include <boost/limits.hpp>
-#include <boost/preprocessor/repetition/enum_params_with_a_default.hpp>
 
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <clasp/clbind/config.h>
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
-#include <clasp/core/builtInClass.h>
+#include <clasp/core/instance.h>
 #include <clasp/core/numbers.h>
-//#include <clasp/clbind/lua_include.hpp>
-//#include <clasp/clbind/detail/object_rep.hpp>
-//#include <clasp/clbind/detail/garbage_collector.hpp>
-//#include <clasp/clbind/detail/operator_id.hpp>
 #include <clasp/clbind/class_registry.h>
-//#include <clasp/clbind/error.hpp>
-//#include <clasp/clbind/handle.hpp>
 #include <clasp/clbind/primitives.h>
 #include <clasp/clbind/typeid.h>
-//#include <clasp/clbind/detail/ref.hpp>
 
 namespace clbind {
 namespace detail {
 class cast_graph;
 class class_id_map;
-};
-};
+}; // namespace detail
+}; // namespace clbind
 
 namespace clbind {
+class ClassRep_O;
+};
 
-CLBIND_API std::string stack_content_by_name(core::Lisp_sp L, int start_index);
+template <> struct gctools::GCInfo<clbind::ClassRep_O> {
+  static bool constexpr NeedsInitialization = true;
+  static bool constexpr NeedsFinalization = false;
+  static GCInfo_policy constexpr Policy = normal;
+};
+namespace clbind {
+
+CLBIND_API std::string stack_content_by_name(core::LispPtr L, int start_index);
 
 struct class_registration;
 
 struct conversion_storage;
 
-class ClassRep_O : public core::BuiltInClass_O {
-  LISP_META_CLASS(StandardClass);
-  LISP_BASE1(core::BuiltInClass_O);
-  LISP_CLASS(clbind, ClbindPkg, ClassRep_O, "ClassRep");
-
+class ClassRep_O : public core::Instance_O {
+  LISP_CLASS(clbind, ClbindPkg, ClassRep_O, "ClassRep", core::Instance_O);
+  // I may want to change this back to have the metaclass standard-class
   friend struct class_registration;
 
 public:
-  bool cxxClassP() const { return true; };
-  bool cxxDerivableClassP() const { return this->m_derivable; };
-  bool primaryCxxDerivableClassP() const { return this->getCreator()->duplicationLevel() == 0; };
+  bool cxxClassP() const override { return true; };
+  bool cxxDerivableClassP() const override { return this->m_derivable; };
 
-  ClassRep_O() : m_derivable(false){};
+#if 0
+ ClassRep_O() : Instance_O(core::lisp_class_rep_class()/*,REF_CLASS_NUMBER_OF_SLOTS_IN_STANDARD_CLASS*/) {
+    printf("%s:%d:%s  create class\n", __FILE__, __LINE__, __FUNCTION__ );
+  };
+#endif
 
-  ClassRep_O(type_id const &type, const std::string &name, bool derivable);
+  ClassRep_O(core::Instance_sp c) : Instance_O(c) { printf("%s:%d:%s  create class\n", __FILE__, __LINE__, __FUNCTION__); };
 
+  ClassRep_O(core::Instance_sp class_, type_id const& type, core::Symbol_sp name, bool derivable);
+
+#if 0
   ClassRep_O(const std::string &name, bool derivable);
-
-  virtual ~ClassRep_O();
+#endif
 
 public:
-  static ClassRep_sp create(type_id const &mtype, const std::string &name, bool derivable) {
-    GC_ALLOCATE_VARIADIC(ClassRep_O, val, mtype, name, derivable);
+  static ClassRep_sp create(core::Instance_sp class_, type_id const& mtype, core::Symbol_sp name, bool derivable) {
+    auto val = gctools::GC<ClassRep_O>::allocate(class_, mtype, name, derivable);
     return val;
   }
-
-#if 0
-        std::pair<void*,void*> allocate() const;
-
-        // this is called as metamethod __call on the ClassRep_O.
-        static int constructor_dispatcher();
-        struct base_info
-        {
-            core::Fixnum_sp pointer_offset; // the offset added to the pointer to obtain a basepointer (due to multiple-inheritance)
-            ClassRep_sp base;
-        };
-
-#endif
   void add_base_class(core::Fixnum_sp pointer_offset, ClassRep_sp base);
 
-  const gctools::Vec0<core::Cons_sp> &bases() const throw() { return m_bases; }
+  const gctools::Vec0<core::Cons_sp>& bases() const throw() { return m_bases; }
 
-  void set_type(type_id const &t) { m_type = t; }
-  type_id const &type() const throw() { return m_type; }
+  void set_type(type_id const& t) { m_type = t; }
+  type_id const& type() const throw() { return m_type._value; }
 
-  std::string name() const throw() { return m_name; }
+  std::string name_() const throw() { return m_name->symbolNameAsString(); }
 
-#if 0 // begin_meister_disabled
-        // the lua reference to the metatable for this class' instances
-        int metatable_ref() const throw() { return m_instance_metatable; }
+  detail::cast_graph const& casts() const { return *m_casts._value; }
 
-        void get_table() const { m_table.push(); }
-        void get_default_table(core::Lisp_sp L) const { m_default_table.push(L); }
+  detail::class_id_map const& classes() const { return *m_classes._value; }
 
-        class_type get_class_type() const { return m_class_type; }
-
-        void add_static_constant(const char* name, int val);
-
-        static int super_callback(core::Lisp_sp L);
-
-        static int lua_settable_dispatcher(core::Lisp_sp L);
-
-        // called from the metamethod for __index
-        // obj is the object pointer
-        static int static_class_gettable(core::Lisp_sp L);
-
-        bool has_operator_in_lua(core::Lisp_sp, int id);
-#endif
-
-  detail::cast_graph const &casts() const {
-    return *m_casts;
-  }
-
-  detail::class_id_map const &classes() const {
-    return *m_classes;
-  }
-
-GCPRIVATE:
-
-#if 0
-        void cache_operators(core::Lisp_sp);
-#endif
+public:
   // this is a pointer to the type_info structure for
   // this type
   // warning: this may be a problem when using dll:s, since
   // typeid() may actually return different pointers for the same
   // type.
-  type_id m_type;
+  dont_expose<type_id> m_type;
 
   // a list of info for every class this class derives from
   // the information stored here is sufficient to do
@@ -182,24 +141,15 @@ GCPRIVATE:
   gctools::Vec0<core::Cons_sp> m_bases;
 
   // the class' name (as given when registered to lua with class_)
-  std::string m_name;
+  core::Symbol_sp m_name;
 
-  detail::cast_graph *m_casts;
+  dont_expose<detail::cast_graph*> m_casts;
   /* What does this store???? */
-  detail::class_id_map *m_classes;
+  dont_expose<detail::class_id_map*> m_classes;
   bool m_derivable;
 };
 
-bool is_class_rep(core::Lisp_sp L, int index);
-}
-template <>
-struct gctools::GCInfo<clbind::ClassRep_O> {
-  static bool constexpr NeedsInitialization = true;
-  static bool constexpr NeedsFinalization = false;
-  static bool constexpr Moveable = true; // old=false
-  static bool constexpr Atomic = false;
-};
+bool is_class_rep(core::LispPtr L, int index);
+} // namespace clbind
 
-//#include <clasp/clbind/detail/overload_rep_impl.hpp>
-
-#endif // CLBIND_CLASS_REP_HPP_INCLUDED
+// #include <clasp/clbind/detail/overload_rep_impl.hpp>

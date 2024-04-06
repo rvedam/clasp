@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: gcStack.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,154 +26,223 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef gc_gcStack_H
-#define gc_gcStack_H
 
 namespace gctools {
-namespace frame {
-typedef core::T_O *ElementType;
-static const size_t IdxRegisterSaveArea = 0;
-static const size_t IdxNumElements = LCC_NARGS_REGISTER;                                 // Where the num arguments (RAW - do not fix!!!)
-static const size_t IdxOverflowArgs = LCC_TOTAL_REGISTERS;                               // IdxOverflowArgs-IdxRegisterSaveArea == Number of arguments passed in registers
-static const size_t IdxRegisterArgumentsStart = IdxOverflowArgs - LCC_ARGS_IN_REGISTERS; // Where the register arguments start
-static const size_t IdxValuesArray = IdxRegisterArgumentsStart;                          // where the stack based arguments start
+
 /*! Frame: A class that maintains an array of T_O* pointers on a thread-local stack for setting up calls.
 This class always needs to be allocated on the stack.
 It uses RAII to pop its array of pointers from the stack when the Frame goes out of scope.
 */
-
 struct Frame {
-  size_t _ArrayLength;
-  size_t _ElementCapacity; // May be larger than length
-  ElementType *_frameBlock;
-  /*! Calculate the number of elements required to represent the frame.
-     It's IdxValuesArray+#elements */
-  static inline size_t FrameElements(size_t frame_elements) {
-    return std::max((frame_elements + IdxOverflowArgs) - LCC_ARGS_IN_REGISTERS, IdxOverflowArgs + 1);
-  }
-  static inline size_t FrameBytes(size_t elements) {
-    return FrameElements(elements) * sizeof(ElementType);
-  }
-#ifdef USE_ALLOCA_FOR_FRAME
-  Frame(ElementType *buffer, size_t numArguments);
+
+  typedef core::T_O* ElementType;
+  ElementType _args[];
+
+  /* Calculate size of frame in bytes for __builtin_alloca
+   */
+  static inline size_t FrameBytes_(size_t elements) { return elements * sizeof(ElementType); }
+
+  Frame(size_t numArguments) { this->debugEmptyFrame(numArguments); }
+
+  ElementType* arguments(size_t start = 0) const { return ((ElementType*)&_args[0]) + start; }
+
+  inline void mkunboundValue_(size_t idx) { this->_args[idx] = gctools::tag_unbound<core::T_O*>(); }
+
+  inline ElementType value_(size_t idx) const { return this->_args[idx]; }
+
+  //! Describe the Frame
+  void dumpFrame(size_t nargs) const;
+  void checkFrame(size_t idx, size_t nargs) const;
+  void debugEmptyFrame(size_t nargs);
+  inline core::T_sp arg(size_t idx) { return core::T_sp((gc::Tagged)this->_args[idx]); }
+};
+
+template <typename... Args> inline void fill_frame_templated(Frame* frame, size_t& idx, Args... args) {
+  using InitialContents = core::T_O * [sizeof...(Args)];
+  InitialContents* initialContents((InitialContents*)frame->arguments(idx));
+  new (initialContents) InitialContents{args.raw_()...};
+  idx += sizeof...(Args);
+};
+
+inline void fill_frame_one_indexed(Frame* frame, size_t idx, core::T_O* val) { frame->_args[idx] = val; }
+
+inline void fill_frame_one(Frame* frame, size_t& idx, core::T_O* val) {
+  frame->_args[idx] = val;
+  idx++;
+}
+
+inline void fill_frame_nargs_args(Frame* frame, size_t& idx, size_t nargs, core::T_O** args) {
+  memcpy((void*)frame->arguments(idx), (void*)args, sizeof(core::T_O*) * nargs);
+  idx += nargs;
+}
+
+#define MAKE_STACK_FRAME(framename, num_elements)                                                                                  \
+  gctools::Frame* framename = reinterpret_cast<gctools::Frame*>(__builtin_alloca(gctools::Frame::FrameBytes_(num_elements)));      \
+  new (framename) gctools::Frame(num_elements);
+
+#if 0
+#define DEBUG_DUMP_FRAME(frame, nargs) frame->dump(nargs);
 #else
-  Frame(size_t numArguments);
+#define DEBUG_DUMP_FRAME(frame, nargs)
 #endif
 
-  inline ElementType &lowLevelElementRef(size_t idx) {
-    GCTOOLS_ASSERT(idx >= 0 && idx < this->_ElementCapacity);
-    return this->_frameBlock[idx];
+#if DEBUG_FRAME() == 1
+#define CHECK_FRAME(framename, _idx_, _nargs_)                                                                                     \
+  if (_idx_ != _nargs_) {                                                                                                          \
+    printf("%s:%d:%s FRAME not filled %lu should be %lu\n", __FILE__, __LINE__, __FUNCTION__, _idx_, _nargs_);                     \
+    abort();                                                                                                                       \
   }
-  inline const ElementType &lowLevelElementRef(size_t idx) const {
-    GCTOOLS_ASSERT(idx >= 0 && idx < this->_ElementCapacity);
-    return this->_frameBlock[idx];
-  }
-  inline void setLength(size_t l) { this->_ArrayLength = l; };
-  inline size_t getLength() const { return this->_ArrayLength; };
-  //! Describe the Frame
-  void dump() const;
-  ~Frame();
-  inline ElementType &operator[](size_t idx) { return this->lowLevelElementRef(idx + IdxValuesArray); }
-  inline core::T_sp arg(size_t idx) { return core::T_sp((gc::Tagged) this->lowLevelElementRef(idx + IdxValuesArray)); }
-};
-};
-
-#ifdef USE_ALLOCA_FOR_FRAME
-#define STACK_FRAME(buffername, framename, num_elements)                                                                                                        \
-  gctools::frame::ElementType *buffername = reinterpret_cast<gctools::frame::ElementType *>(__builtin_alloca(gctools::frame::Frame::FrameBytes(num_elements))); \
-  gctools::frame::Frame framename(buffername, num_elements);
+#elif DEBUG_FRAME() == 2
+#define CHECK_FRAME(framename, _idx_, _nargs_) framename->checkFrame(_idx_, _nargs_)
+#elif DEBUG_FRAME() == 0
+#define CHECK_FRAME(framename, _idx_, _nargs_)
 #else
-#define STACK_FRAME(buffername, framename, num_elements) gctools::frame::Frame framename(num_elements);
+#error "Bad DEBUG_FRAME() value"
 #endif
 
 } // namespace gctools
 
 namespace core {
-// A struct that wraps va_list and behaves like a Common Lisp LIST
-typedef gctools::smart_ptr<VaList_S> VaList_sp;
-/*! VaList_S: A class that maintains a C va_list and allows the programmer to
-iterate over a list of arguments.  It uses a lot of trickery to let it iterate over
-a list of arguments passed to a function or a list of arguments in a Frame.
+
+typedef gctools::smart_ptr<Vaslist> Vaslist_sp;
+/*! Vaslist: A class that maintains a pointer to a vector of arguments and a number of arguments
+to allow iteration over a list of arguments.
 It must always be allocated on the Stack.
 */
-struct VaList_S {
+struct Vaslist {
   /* WARNING WARNING WARNING WARNING
-DO NOT CHANGE THE ORDER OF THESE OBJECTS WITHOUT UPDATING THE DEFINITION OF +va_list+ in cmpintrinsics.lsp
+DO NOT CHANGE THE ORDER OF THESE OBJECTS WITHOUT UPDATING THE DEFINITION OF +vaslist+ in cmpintrinsics.lisp
 */
-  mutable va_list _Args;
-  core::T_O *asTaggedPtr() {
-    return gctools::tag_valist<core::T_O *>(this);
+  mutable T_O** _Args;          // MUST be first slot
+  mutable size_t _ShiftedNargs; // MUST be second slot
+
+  // fixme2022 - make NargsShift = 2
+  static constexpr size_t NargsShift = 2;
+  static constexpr size_t NargsDecrement = 1 << NargsShift;
+  static constexpr size_t NargsMask = 0;
+
+#ifdef _DEBUG_BUILD
+  inline void check_ShiftedNargs() const {
+    if ((this->_ShiftedNargs & NargsMask) != 0 || this->_ShiftedNargs > (CALL_ARGUMENTS_LIMIT << NargsShift)) {
+      printf("%s:%d  this->_ShiftedNargs has bad value %lu\n", __FILE__, __LINE__, this->_ShiftedNargs);
+    }
   }
-  VaList_S(gc::frame::Frame &frame) {
-    LCC_SETUP_VA_LIST_FROM_FRAME(this->_Args, frame);
-#if 0
-      // This must match (and should be in) lispCallingConvention.h
-      this->_Args[0].reg_save_area = &frame.lowLevelElementRef(gc::frame::IdxRegisterSaveArea);
-      this->_Args[0].overflow_arg_area = &frame.lowLevelElementRef(gc::frame::IdxOverflowArgs);
-      // This is where the number of arguments remaining should be stored
-      ((uintptr_t*)(this->_Args[0].reg_save_area))[LCC_NARGS_REGISTER] = frame._ArrayLength;
-      ((uintptr_t*)(this->_Args[0].reg_save_area))[LCC_OVERFLOW_SAVE_REGISTER] = (uintptr_t)(this->_Args[0].overflow_arg_area);
-      this->_Args[0].gp_offset = (gc::frame::IdxRegisterArgumentsStart-gc::frame::IdxRegisterSaveArea)*sizeof(gc::frame::ElementType);
-      this->_Args[0].fp_offset = 304;
+#else
+  inline void check_nargs() const {};
 #endif
-  };
 
-  VaList_S(int nargs, va_list vargs) {
-    va_copy(this->_Args, vargs);
-  };
-  VaList_S(const VaList_S &other) {
-    va_copy(this->_Args, other._Args);
+  inline size_t nargs() const { return this->_ShiftedNargs >> NargsShift; };
+  inline bool nargs_zero() const { return this->_ShiftedNargs == 0; };
+
+  inline core::T_O* asTaggedPtr() { return gctools::tag_vaslist<core::T_O*>(this); }
+  Vaslist(size_t nargs, gc::Frame* frame) : _Args(frame->arguments(0)), _ShiftedNargs(nargs << NargsShift) { this->check_nargs(); };
+
+  Vaslist(size_t nargs, T_O** args) : _Args(args), _ShiftedNargs(nargs << NargsShift) { this->check_nargs(); };
+  // The Vaslist._Args must be initialized immediately after this
+  //    using va_start(xxxx._Args,FIRST_ARG)
+  //    See lispCallingConvention.h INITIALIZE_VASLIST
+  Vaslist(size_t nargs) : _ShiftedNargs(nargs << NargsShift) { this->check_nargs(); };
+  Vaslist(const Vaslist& other) : _Args(other._Args), _ShiftedNargs(other._ShiftedNargs) { this->check_nargs(); }
+
+  Vaslist(){};
+  ~Vaslist() {}
+
+  T_O* operator[](size_t index) { return this->_Args[index]; };
+
+  inline core::T_sp next_arg() {
+    core::T_sp obj((gctools::Tagged)(*this->_Args));
+    this->_Args++;
+    this->_ShiftedNargs -= NargsDecrement;
+    return obj;
   }
 
-  VaList_S(){};
-
-  void set(VaList_S *other, size_t nargs_remaining) {
-    LCC_SETUP_VA_LIST_FROM_VA_LIST(this->_Args, other->_Args, nargs_remaining);
+  inline core::T_O* next_arg_raw() {
+    core::T_O* obj = *this->_Args;
+    this->_Args++;
+    this->_ShiftedNargs -= NargsDecrement;
+    return obj;
   }
-  virtual ~VaList_S(){}; // Make it polymorphic
-  inline size_t nargs() const { return LCC_raw_VA_LIST_NUMBER_OF_ARGUMENTS(this->_Args); };
-  inline core::T_O *indexed_arg(size_t idx) const {
-    core::T_O *res;
-    LCC_VA_LIST_INDEXED_ARG(res, *this, idx);
-    return res;
+
+  inline core::T_sp next_arg_indexed(size_t idx) {
+    core::T_sp obj((gctools::Tagged)this->operator[](idx));
+    return obj;
+  }
+
+  void set_from_other_Vaslist(Vaslist* other, size_t arg_idx) {
+    this->_ShiftedNargs = other->_ShiftedNargs - (arg_idx << NargsShift); // remaining arguments
+    this->_Args = other->_Args + arg_idx;                                 // advance to start on remaining args
+    this->check_nargs();
+  }
+
+  inline core::T_O** args() const { return this->_Args; }
+
+  static T_O* make_shifted_nargs(size_t nargs) { return (T_O*)(nargs << NargsShift); }
+  static size_t nargs_offset() { return offsetof(Vaslist, _ShiftedNargs); }
+  static size_t args_offset() { return offsetof(Vaslist, _Args); }
+
+  inline core::T_O* relative_indexed_arg(size_t idx) const { return this->_Args[idx]; }
+
+  inline core::T_sp iarg(size_t idx) const {
+    core::T_sp tsp((gctools::Tagged)this->_Args[idx]);
+    return tsp;
   }
 };
-};
+}; // namespace core
 
 namespace gctools {
-/*! Specialization of smart_ptr<T> on core::VaList_S
-*/
-template <>
-class smart_ptr<core::VaList_S> : public tagged_ptr<core::VaList_S> {
+/*! Specialization of smart_ptr<T> on core::Vaslist
+ */
+template <> class smart_ptr<core::Vaslist> { // : public tagged_ptr<core::Vaslist> {
 public:
-  typedef core::VaList_S Type;
+  typedef core::Vaslist Type;
+  Type* theObject;
 
 public:
-  //Default constructor, set theObject to NULL
-  smart_ptr() : tagged_ptr<Type>(){};
-  explicit inline smart_ptr(core::VaList_S *ptr) : tagged_ptr<Type>((Tagged)gctools::tag_valist<Type *>(ptr)) {
-    GCTOOLS_ASSERT(this->valistp());
-  };
+  // Default constructor, set theObject to NULL
+  smart_ptr() : theObject((Type*)NULL){};
+  explicit inline smart_ptr(core::Vaslist* ptr)
+      : theObject((Type*)gctools::tag_vaslist<Type*>(ptr)){
+            //    GCTOOLS_ASSERT(this->vaslistp());
+        };
   /*! Create a smart pointer from an existing tagged pointer */
-  explicit inline smart_ptr(Tagged ptr) : tagged_ptr<Type>((Tagged)ptr) {
-    GCTOOLS_ASSERT(this->theObject == NULL || this->valistp());
+  explicit inline smart_ptr(Tagged ptr)
+      : theObject((Type*)ptr){
+            //    GCTOOLS_ASSERT(this->theObject == NULL || this->vaslistp());
+        };
+
+  inline Type* operator->() {
+    //    GCTOOLS_ASSERT(this->vaslistp());
+    return reinterpret_cast<Type*>(this->unsafe_valist());
   };
 
-  inline Type *operator->() {
-    GCTOOLS_ASSERT(this->valistp());
-    return reinterpret_cast<Type *>(this->unsafe_valist());
+  inline const Type* operator->() const {
+    //    GCTOOLS_ASSERT(this->vaslistp());
+    return reinterpret_cast<Type*>(this->unsafe_valist());
   };
 
-  inline const Type *operator->() const {
-    GCTOOLS_ASSERT(this->valistp());
-    return reinterpret_cast<Type *>(this->unsafe_valist());
+  inline Type& operator*() {
+    //    GCTOOLS_ASSERT(this->vaslistp());
+    return *reinterpret_cast<Type*>(this->unsafe_valist());
   };
 
-  inline Type &operator*() {
-    GCTOOLS_ASSERT(this->valistp());
-    return *reinterpret_cast<Type *>(this->unsafe_valist());
-  };
+public:
+  inline operator bool() { return this->theObject != NULL; };
+
+public:
+  inline bool nilp() const { return tagged_nilp(this->theObject); }
+  inline bool notnilp() const { return (!this->nilp()); };
+  inline bool fixnump() const { return tagged_fixnump(this->theObject); };
+  inline bool generalp() const { return tagged_generalp(this->theObject); };
+  inline bool consp() const { return tagged_consp(this->theObject); };
+  inline bool objectp() const { return this->generalp() || this->consp(); };
+  inline Type* unsafe_valist() const { return reinterpret_cast<Type*>(untag_vaslist(this->theObject)); };
+  inline core::T_O* raw_() const { return reinterpret_cast<core::T_O*>(this->theObject); };
+  inline gctools::Tagged tagged_() const { return reinterpret_cast<gctools::Tagged>(this->theObject); }
 };
-};
 
-#endif
+inline void fill_frame_vaslist(Frame* frame, size_t& idx, const core::Vaslist_sp vaslist) {
+  core::Vaslist* vas = vaslist.unsafe_valist();
+  fill_frame_nargs_args(frame, idx, vas->nargs(), vas->args());
+}
+
+}; // namespace gctools

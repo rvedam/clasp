@@ -1,3 +1,4 @@
+#pragma once
 /*
     File: load.h
 */
@@ -24,27 +25,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef core_load_H
-#define core_load_H
-
-#include <clasp/core/foundation.h>
 
 namespace kw {
-extern core::Symbol_sp _sym_default;
+extern core::Symbol_sp& _sym_default;
 }
 
 namespace core {
 
-T_sp af_loadSource(T_sp source, bool verbose, bool print, T_sp externalFormat);
+T_sp core__load_source(T_sp source, bool verbose, bool print, T_sp externalFormat, bool skipShebang);
 
-T_sp af_load(T_sp source,
-             T_sp verbose = _Nil<T_O>(),
-             T_sp print = _Nil<T_O>(),
-             T_sp if_does_not_exist = _Nil<T_O>(),
-             T_sp external_format = kw::_sym_default,
-             T_sp search_list = _Nil<T_O>());
+T_sp core__load_no_package_set(T_sp source, T_sp verbose = nil<T_O>(), T_sp print = nil<T_O>(), T_sp if_does_not_exist = nil<T_O>(),
+                               T_sp external_format = kw::_sym_default, T_sp search_list = nil<T_O>());
 
-void initialize_load();
-};
+T_sp cl__load(T_sp source, T_sp verbose = nil<T_O>(), T_sp print = nil<T_O>(), T_sp if_does_not_exist = nil<T_O>(),
+              T_sp external_format = kw::_sym_default, T_sp search_list = nil<T_O>());
 
-#endif
+}; // namespace core

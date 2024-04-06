@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: singleDispatchGenericFunction.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,125 +25,147 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef _SINGLEDISPATCHGENERICFUNCTION_H_
-#define _SINGLEDISPATCHGENERICFUNCTION_H_
 
-#include <clasp/core/foundation.h>
 #include <clasp/core/hashTable.fwd.h>
 #include <clasp/core/singleDispatchGenericFunction.fwd.h>
 #include <clasp/core/singleDispatchMethod.fwd.h>
-#include <clasp/core/singleDispatchEffectiveMethodFunction.fwd.h>
+#include <clasp/core/singleDispatchMethod.h>
+#include <clasp/llvmo/intrinsics.fwd.h>
+#include <atomic>
 
 namespace core {
+FORWARD(SingleDispatchMethod);
+class SingleDispatchGenericFunction_O : public SimpleFun_O {
+  LISP_CLASS(core, CorePkg, SingleDispatchGenericFunction_O, "SingleDispatchGenericFunction", SimpleFun_O);
 
-class SingleDispatchGenericFunctionClosure : public FunctionClosure {
 public:
-  /*! Store the methods here */
-  List_sp _Methods;
-  LambdaListHandler_sp _lambdaListHandler;
-  /*! Store the method functions hashed on the receiver class */
-  //	HashTable_sp	classesToClosures;
+  SingleDispatchGenericFunction_O(FunctionDescription_sp fdesc, size_t newArgumentIndex);
+
 public:
-  DISABLE_NEW();
-  SingleDispatchGenericFunctionClosure(T_sp name, Symbol_sp k, SOURCE_INFO)
-      : FunctionClosure(name, k, _Nil<T_O>() /*Env*/, SOURCE_INFO_PASS), _Methods(_Nil<T_O>()), _lambdaListHandler(_Nil<LambdaListHandler_O>()){};
-  SingleDispatchGenericFunctionClosure(T_sp name)
-      : FunctionClosure(name), _Methods(_Nil<T_O>()), _lambdaListHandler(_Nil<LambdaListHandler_O>()){};
-  void finishSetup(LambdaListHandler_sp llh, Symbol_sp k) {
-    this->_lambdaListHandler = llh;
-    this->kind = k;
+  static SingleDispatchGenericFunction_sp create_single_dispatch_generic_function(T_sp gfname, size_t singleDispatchArgumentIndex,
+                                                                                  List_sp lambdaList);
+
+public:
+  std::atomic<T_sp> callHistory;
+  size_t argumentIndex;
+  std::atomic<T_sp> methods;
+
+  SingleDispatchMethod_sp dispatch(T_sp dispatchArg) {
+#ifdef DEBUG_EVALUATE
+    if (_sym_STARdebugEvalSTAR && _sym_STARdebugEvalSTAR->symbolValue().notnilp()) {
+      printf("%s:%d single dispatch arg0 %s\n", __FILE__, __LINE__, _rep_(dispatchArg).c_str());
+    }
+#endif
+    Instance_sp dispatchArgClass = lisp_instance_class(dispatchArg);
+    List_sp lcallHistory = gc::As_assert<List_sp>(callHistory.load(std::memory_order_relaxed));
+    // If the call history already records this class directly,
+    // just return the cached method.
+    while (lcallHistory.consp()) {
+      Cons_sp entry = gc::As_unsafe<Cons_sp>(CONS_CAR(lcallHistory));
+      lcallHistory = CONS_CDR(lcallHistory);
+      if (CONS_CAR(entry) == dispatchArgClass) {
+        return gc::As_assert<SingleDispatchMethod_sp>(CONS_CDR(entry));
+      }
+    }
+    // There wasn't a direct match in the call history - so search the class-precedence list of the
+    // argument to see if any of the ancestor classes are handled by this single dispatch generic function
+    // This is the slow path for discriminating functions.
+    // Update the call-history with what we find.
+    List_sp classPrecedenceList = dispatchArgClass->instanceRef(Instance_O::REF_CLASS_CLASS_PRECEDENCE_LIST);
+    List_sp lmethods = gc::As_assert<List_sp>(methods.load(std::memory_order_relaxed));
+    while (classPrecedenceList.consp()) {
+      Instance_sp class_ = gc::As<Instance_sp>(CONS_CAR(classPrecedenceList));
+      classPrecedenceList = CONS_CDR(classPrecedenceList);
+      //      printf("%s:%d:%s class_ = %s\n", __FILE__, __LINE__, __FUNCTION__, _rep_(class_).c_str());
+      List_sp curMethod = lmethods;
+      while (curMethod.consp()) {
+        SingleDispatchMethod_sp method = gc::As_unsafe<SingleDispatchMethod_sp>(CONS_CAR(curMethod));
+        curMethod = CONS_CDR(curMethod);
+        Instance_sp methodClass = method->receiver_class();
+        //        printf("%s:%d:%s methodClass = %s   class_ = %s\n", __FILE__, __LINE__, __FUNCTION__, _rep_(methodClass).c_str(),
+        //        _rep_(class_).c_str());
+        if (methodClass == class_) {
+          // Update the call-history using CAS
+          // If there are two simultaneous calls to this function
+          // with the same dispatchArg, this can result in redundant
+          // call history entries. But that's harmless.
+          T_sp expected;
+          Cons_sp entry = Cons_O::create(dispatchArgClass, method);
+          Cons_sp callHistoryEntry = Cons_O::create(entry, nil<T_O>());
+          do {
+            expected = callHistory.load(std::memory_order_relaxed);
+            callHistoryEntry->rplacd(expected);
+          } while (!callHistory.compare_exchange_weak(expected, callHistoryEntry));
+          // Return the computed method
+          return method;
+        }
+      }
+    }
+    SIMPLE_ERROR("This single dispatch generic function {} does not recognize argument class {}  arg {}",
+                 _rep_(this->asSmartPtr()), _rep_(dispatchArgClass), _rep_(dispatchArg).c_str());
   }
-  T_sp lambdaList() const;
-  virtual size_t templatedSizeof() const { return sizeof(*this); };
-  virtual const char *describe() const { return "SingleDispatchGenericFunctionClosure"; };
-  LCC_VIRTUAL LCC_RETURN LISP_CALLING_CONVENTION();
-  bool singleDispatchGenericP() const { return true; };
 
-  /*! Define a method to this SingleDispatchGenericFunction
-	  If there is already a method with the same receiver then replace it
-	  unless it's locked. Whenever a method is defined the method combination table
-	  is wiped out */
-  void addMethod(SingleDispatchMethod_sp method);
-  LambdaListHandler_sp lambdaListHandler() const { return this->_lambdaListHandler; };
-
-  Function_sp slowMethodLookup(Class_sp mc);
-  Function_sp computeEffectiveMethodFunction(gctools::Vec0<SingleDispatchMethod_sp> const &applicableMethods);
-};
-
-class SingleDispatchGenericFunction_O : public Function_O {
-  LISP_BASE1(Function_O);
-  LISP_CLASS(core, CorePkg, SingleDispatchGenericFunction_O, "single-dispatch-generic-function");
-  DECLARE_INIT();
-  //    DECLARE_ARCHIVE();
-  friend class SingleDispatchGenericFunctoid;
-
-public: // Simple default ctor/dtor
-  DEFAULT_CTOR_DTOR(SingleDispatchGenericFunction_O);
-
-public: // ctor/dtor for classes with shared virtual base
-        //    explicit SingleDispatchGenericFunction_O(core::Class_sp const& mc) : T_O(mc), Function(mc) {};
-        //    virtual ~SingleDispatchGenericFunction_O() {};
-public:
-  static SingleDispatchGenericFunction_sp create(T_sp functionName, LambdaListHandler_sp llhandler);
-
-public: // Functions here
-  /*! Return the Cons of methods attached to this SingleDispatchGenericFunction */
-  List_sp methods() const {
-    gctools::tagged_pointer<SingleDispatchGenericFunctionClosure> cl = this->closure.as<SingleDispatchGenericFunctionClosure>();
-    return cl->_Methods;
+private:
+  [[noreturn]] LCC_RETURN tooFew(size_t nargs) {
+    throwTooFewArgumentsError(this->asSmartPtr(), nargs, argumentIndex + 1);
+  }
+  template <size_t DispatchIndex>
+  struct EntryPointFixed {
+    static LCC_RETURN entry_point_n(T_O* lcc_closure, size_t lcc_nargs, T_O** lcc_args) {
+      SETUP_CLOSURE(SingleDispatchGenericFunction_O, closure);
+      DO_DRAG_CXX_CALLS();
+      if (lcc_nargs > DispatchIndex) {
+        T_sp dispatchArg((gctools::Tagged)lcc_args[DispatchIndex]);
+        return closure->dispatch(dispatchArg)->_function->apply_raw(lcc_nargs, lcc_args);
+      } else closure->tooFew(lcc_nargs);
+    }
+    template <typename... Ts>
+    static LCC_RETURN entry_point_fixed(T_O* lcc_closure, Ts... args) {
+      SETUP_CLOSURE(SingleDispatchGenericFunction_O, closure);
+      DO_DRAG_CXX_CALLS();
+      if constexpr(sizeof...(Ts) > DispatchIndex) {
+        T_sp dispatchArg((gctools::Tagged)std::get<DispatchIndex>(std::make_tuple(args...)));
+        return closure->dispatch(dispatchArg)->_function->funcall_raw(args...);
+      } else closure->tooFew(sizeof...(Ts));
+    }
   };
+  // In practice all SDGFs specialize on the 0th or 1st argument
+  // so this is never used. It's included for completeness.
+  struct EntryPointGeneric {
+    static inline LCC_RETURN LISP_CALLING_CONVENTION() {
+      SETUP_CLOSURE(SingleDispatchGenericFunction_O, closure);
+      DO_DRAG_CXX_CALLS();
+      if (lcc_nargs > closure->argumentIndex) {
+        T_sp dispatchArg((gctools::Tagged)lcc_args[closure->argumentIndex]);
+        return closure->dispatch(dispatchArg)->_function->apply_raw(lcc_nargs, lcc_args);
+      } else closure->tooFew(lcc_nargs);
+    }
+    template <typename... Ts>
+    static inline LCC_RETURN entry_point_fixed(T_O* lcc_closure,
+                                               Ts... args) {
+      core::T_O* lcc_args[sizeof...(Ts)] = {args...};
+      return entry_point_n(lcc_closure, sizeof...(Ts), lcc_args);
+    }
+    template <typename... Ts>
+    [[noreturn]] static LCC_RETURN error_entry_point_fixed(T_O* lcc_closure, Ts... args) {
+      SETUP_CLOSURE(SingleDispatchGenericFunction_O, closure);
+      closure->tooFew(sizeof...(Ts));
+    }
+  };
+  static const ClaspXepTemplate selectXEP(size_t dispatchIndex) {
+    switch (dispatchIndex) {
+    case 0: return XepStereotype<EntryPointFixed<0>>();
+    case 1: return XepStereotype<EntryPointFixed<1>>();
+    default: return XepStereotype<EntryPointGeneric>();
+    }
+  }
+};
 
-}; // SingleDispatchGenericFunction class
-
-}; // core namespace
-TRANSLATE(core::SingleDispatchGenericFunction_O);
+}; // namespace core
 
 namespace core {
-class SingleDispatchGenericFunctoid : public Closure {
-private:
-  SingleDispatchGenericFunction_sp _sdgf;
+SingleDispatchGenericFunction_sp
+core__ensure_single_dispatch_generic_function(T_sp gfname, bool autoExport, size_t singleDispatchArgumentIndex, List_sp lambdaList);
+// void core__satiateSingleDispatchGenericFunctions();
 
-public:
-  DISABLE_NEW();
-  virtual const char *describe() const { return "SingleDispatchGenericFunctoid"; };
-  LCC_VIRTUAL LCC_RETURN LISP_CALLING_CONVENTION() {
-    IMPLEMENT_MEF(BF("Handle single dispatch"));
-#if 0            
-	    *lcc_resultP = this->_sdgf->INVOKE(lcc_nargs, nargs,args);
-#endif
-  }
-};
-
-class Lambda_emf : public FunctionClosure {
-  FRIEND_GC_SCANNER(core::Lambda_emf);
-
-private:
-  /*! Store the method_function that this emf invokes.
-	  This function takes two arguments: (args next-emfun) */
-  Function_sp _method_function;
-
-public:
-  virtual const char *describe() const { return "Lambda_emf"; };
-  bool requires_activation_frame() const { return true; };
-  virtual size_t templatedSizeof() const { return sizeof(*this); };
-
-public:
-  Lambda_emf(T_sp name,
-             SingleDispatchGenericFunction_sp gf,
-             SingleDispatchMethod_sp cur_method);
-  DISABLE_NEW();
-
-  LCC_VIRTUAL LCC_RETURN LISP_CALLING_CONVENTION() {
-    IMPLEMENT_ME();
-#if 0
-            // The closedEnv 
-            ASSERTF(closedEnv.nilp(),BF("Since I don't pass the closedEnv forward it I expect that it should always be nil - this time it wasn't - figure out what is up with that"));
-            return this->_method_function->INVOKE(nargs,args);
-#endif
-  }
-};
-
-T_sp af_ensureSingleDispatchGenericFunction(Symbol_sp gfname, LambdaListHandler_sp llhandler);
-};
-
-#endif /* _SINGLEDISPATCHGENERICFUNCTION_H_ */
+}; // namespace core

@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -28,45 +28,47 @@ THE SOFTWARE.
 #include <map>
 #include <clasp/core/foundation.h>
 #include <clasp/core/package.h>
-#include <clasp/core/str.h>
+#include <clasp/core/array.h>
 #include <clasp/core/allClSymbols.h>
 
-#ifdef DEBUG_CL_SYMBOLS
+#ifdef DEFINE_CL_SYMBOLS
 
 namespace core {
 
 map<string, int> globalAllClSymbols;
 set<string> globalMissingClSymbols;
 
-void throwIfNotValidClSymbol(const string &name) {
+void throwIfNotValidClSymbol(const string& name) {
   map<string, int>::iterator it = globalAllClSymbols.find(name);
   if (it == globalAllClSymbols.end()) {
-    SIMPLE_ERROR(BF("They symbol %s is being exported from COMMON-LISP but it is not one of the canonical CL symbols") % name);
+    SIMPLE_ERROR("They symbol {} is being exported from COMMON-LISP but it is not one of the canonical CL symbols", name);
   }
   ++it->second;
 }
 
-#define ARGS_af_calculateMissingCommonLispSymbols "()"
-#define DECL_af_calculateMissingCommonLispSymbols ""
-#define DOCS_af_calculateMissingCommonLispSymbols "calculateMissingCommonLispSymbols"
-T_sp af_calculateMissingCommonLispSymbols() {
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(calculateMissingCommonLispSymbols)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__calculate_missing_common_lisp_symbols() {
   Package_sp commonLispPackage = _lisp->commonLispPackage();
-  List_sp missing = _Nil<T_O>();
+  List_sp missing = nil<T_O>();
+  MultipleValues& mvn = core::lisp_multipleValues();
   for (auto it : globalAllClSymbols) {
     T_mv sym = commonLispPackage->findSymbol(it.first);
-    T_sp found = sym.valueGet(1);
+    T_sp found = mvn.valueGet(1, sym.number_of_values());
     if (found.nilp()) {
-      missing = Cons_O::create(Str_O::create(it.first), missing);
+      missing = Cons_O::create(SimpleBaseString_O::make(it.first), missing);
     }
   }
   return missing;
 }
 
 void initializeAllClSymbols(Package_sp commonLispPkg) {
-#define AddClSymbol(name)                        \
-  {                                              \
-    Symbol_sp sym = commonLispPkg->intern(name); \
-    commonLispPkg->_export2(sym);                \
+#define AddClSymbol(name)                                                                                                          \
+  {                                                                                                                                \
+    Symbol_sp sym = commonLispPkg->intern(SimpleBaseString_O::make(name));                                                         \
+    commonLispPkg->_export2(sym);                                                                                                  \
   }
   AddClSymbol("&ALLOW-OTHER-KEYS");
   AddClSymbol("&AUX");
@@ -1048,9 +1050,6 @@ void initializeAllClSymbols(Package_sp commonLispPkg) {
   AddClSymbol("ZEROP");
 };
 
-void initializeAllClSymbolsFunctions() {
-  SYMBOL_EXPORT_SC_(CorePkg, calculateMissingCommonLispSymbols);
-  Defun(calculateMissingCommonLispSymbols);
-};
-};
+void initializeAllClSymbolsFunctions() { SYMBOL_EXPORT_SC_(CorePkg, calculateMissingCommonLispSymbols); };
+}; // namespace core
 #endif

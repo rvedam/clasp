@@ -24,30 +24,22 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
-
-#include <clasp/core/useBoostPython.h>
+// #define DEBUG_LEVEL_FULL
 
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/lisp.h>
-#include <clasp/core/conditions.h>
-#include <clasp/core/builtInClass.h>
 #include <clasp/core/evaluator.h>
 #include <clasp/core/lispStream.h>
 #include <clasp/core/symbolTable.h>
-#if defined(XML_ARCHIVE)
-#include <xmlSaveAorchive.h>
-#include <xmlLoadArchive.h>
-#endif // defined(XML_ARCHIVE)
-//#i n c l u d e "hierarchy.h"
-//#i n c l u d e "render.h"
 
 #include <clasp/core/externalObject.h>
 #include <clasp/core/null.h>
-#include <clasp/core/environment.h>
 #include <clasp/core/lambdaListHandler.h>
 #include <clasp/core/lispDefinitions.h>
+#include <clasp/core/symbol.h>
+#include <clasp/core/instance.h>
+#include <clasp/core/creator.h>
 #include <clasp/core/record.h>
 #include <clasp/core/print.h>
 #include <clasp/core/wrappers.h>
@@ -59,17 +51,25 @@ This chapter describes the classes and methods available within Cando-Script.
 __END_DOC
 */
 
-using namespace core;
+extern "C" {
+bool low_level_equal(core::T_O* a, core::T_O* b) {
+  core::T_sp ta((gctools::Tagged)a);
+  core::T_sp tb((gctools::Tagged)b);
+  return cl__equal(ta, tb);
+};
+};
+
+extern "C" {
+__attribute__((noinline)) void drag_delay(){};
+};
+
+namespace core {
 
 uint __nextGlobalClassSymbol = 1;
 
-void set_nextGlobalClassSymbol(uint z) {
-  __nextGlobalClassSymbol = z;
-}
+void set_nextGlobalClassSymbol(uint z) { __nextGlobalClassSymbol = z; }
 
-uint get_nextGlobalClassSymbol() {
-  return __nextGlobalClassSymbol;
-}
+uint get_nextGlobalClassSymbol() { return __nextGlobalClassSymbol; }
 
 uint get_nextGlobalClassSymbolAndAdvance() {
   uint n = __nextGlobalClassSymbol;
@@ -77,19 +77,15 @@ uint get_nextGlobalClassSymbolAndAdvance() {
   return n;
 }
 
-std::ostream &operator<<(std::ostream &out, T_sp obj) {
+std::ostream& operator<<(std::ostream& out, T_sp obj) {
   out << _rep_(obj);
   return out;
 }
 
-_RootDummyClass::_RootDummyClass() : GCObject(){};
-
-namespace core {
-
 T_sp core_initialize(T_sp obj, core::List_sp arg);
 
 T_sp alist_from_plist(List_sp plist) {
-  T_sp alist(_Nil<T_O>());
+  T_sp alist(nil<T_O>());
   while (plist.notnilp()) {
     T_sp key = oCar(plist);
     plist = oCdr(plist);
@@ -100,18 +96,18 @@ T_sp alist_from_plist(List_sp plist) {
   return alist; // should I reverse this?
 }
 
-#define ARGS_core_makeCxxObject "(class-name &rest args)"
-#define DECL_core_makeCxxObject ""
-#define DOCS_core_makeCxxObject "makeCxxObject"
-T_sp core_makeCxxObject(T_sp class_or_name, T_sp args) {
-  Class_sp theClass;
-  ;
-  if (Class_sp argClass = class_or_name.asOrNull<Class_O>()) {
+CL_LAMBDA(class-name &rest args);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(make-cxx-object makes a C++ object using the encode/decode/fields functions)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__make_cxx_object(T_sp class_or_name, T_sp args) {
+  Instance_sp theClass;
+  if (Instance_sp argClass = class_or_name.asOrNull<Instance_O>()) {
     theClass = argClass;
   } else if (class_or_name.nilp()) {
     goto BAD_ARG0;
   } else if (Symbol_sp name = class_or_name.asOrNull<Symbol_O>()) {
-    theClass = cl_findClass(name, true, _Nil<T_O>());
+    theClass = gc::As_unsafe<Instance_sp>(cl__find_class(name, true, nil<T_O>()));
   } else {
     goto BAD_ARG0;
   }
@@ -120,296 +116,378 @@ T_sp core_makeCxxObject(T_sp class_or_name, T_sp args) {
     if (args.notnilp()) {
       args = alist_from_plist(args);
       //      printf("%s:%d initializer alist = %s\n", __FILE__, __LINE__, _rep_(args).c_str());
-      instance->initialize(args);
+      if (instance.generalp()) {
+        General_sp ginstance(instance.unsafe_general());
+        ginstance->initialize(args);
+      } else {
+        SIMPLE_ERROR("Add support to decode object of class: {}", _rep_(cl__class_of(instance)));
+      }
     }
     return instance;
   }
 BAD_ARG0:
-  TYPE_ERROR(class_or_name, Cons_O::createList(cl::_sym_Class_O, cl::_sym_Symbol_O));
+  TYPE_ERROR(class_or_name, Cons_O::createList(cl::_sym_or, cl::_sym_class, cl::_sym_Symbol_O));
   UNREACHABLE();
 }
 
-#define ARGS_core_fieldsp "(obj)"
-#define DECL_core_fieldsp ""
-#define DOCS_core_fieldsp "fieldsp returns true if obj has a fields function"
-bool core_fieldsp(T_sp obj) {
-  return obj->fieldsp();
+CL_LAMBDA(class-name &rest args);
+CL_DECLARE();
+CL_DOCSTRING(
+    R"dx(load-cxx-object makes a C++ object using the encode/decode/fields functions using decoder/loader(s) - they support patching of objects)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__load_cxx_object(T_sp class_or_name, T_sp args) {
+  Instance_sp theClass;
+  if (Instance_sp argClass = class_or_name.asOrNull<Instance_O>()) {
+    theClass = argClass;
+  } else if (class_or_name.nilp()) {
+    goto BAD_ARG0;
+  } else if (Symbol_sp name = class_or_name.asOrNull<Symbol_O>()) {
+    theClass = gc::As_unsafe<Instance_sp>(cl__find_class(name, true, nil<T_O>()));
+  } else {
+    goto BAD_ARG0;
+  }
+  {
+    T_sp instance = theClass->make_instance();
+    if (args.notnilp()) {
+      //      args = alist_from_plist(args);
+      //      printf("%s:%d initializer alist = %s\n", __FILE__, __LINE__, _rep_(args).c_str());
+      if (instance.generalp()) {
+        General_sp ginstance(instance.unsafe_general());
+        ginstance->decode(args);
+      } else {
+        SIMPLE_ERROR("Add support to decode object of class: {}", _rep_(cl__class_of(instance)));
+      }
+    }
+    return instance;
+  }
+BAD_ARG0:
+  TYPE_ERROR(class_or_name, Cons_O::createList(cl::_sym_class, cl::_sym_Symbol_O));
+  UNREACHABLE();
 }
 
-#define ARGS_core_printCxxObject "(obj stream)"
-#define DECL_core_printCxxObject ""
-#define DOCS_core_printCxxObject "printCxxObject"
-T_sp core_printCxxObject(T_sp obj, T_sp stream) {
-  if (core_fieldsp(obj)) {
-    clasp_write_char('#', stream);
-    clasp_write_char('I', stream);
-    clasp_write_char('(', stream);
-    Class_sp myclass = lisp_instance_class(obj);
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(fieldsp returns true if obj has a fields function)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool core__fieldsp(T_sp obj) {
+  if (obj.generalp()) {
+    return obj.unsafe_general()->fieldsp();
+  }
+  SIMPLE_ERROR("Add support for fieldsp for {}", _rep_(cl__class_of(obj)));
+}
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(encode object as an a-list)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::List_sp core__encode(T_sp arg) {
+  if (arg.generalp())
+    return arg.unsafe_general()->encode();
+  IMPLEMENT_MEF("Implement for non-general objects");
+};
+
+CL_LAMBDA(obj arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(decode object from a-list)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__decode(T_sp obj, core::List_sp arg) {
+  if (obj.generalp())
+    obj.unsafe_general()->decode(arg);
+  return obj;
+  IMPLEMENT_MEF("Implement for non-general objects");
+};
+
+CL_LAMBDA(obj stream);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(printCxxObject)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__print_cxx_object(T_sp obj, T_sp stream) {
+  if (core__fieldsp(obj)) {
+    stream_write_char(stream, '#');
+    stream_write_char(stream, 'I');
+    stream_write_char(stream, '(');
+    Instance_sp myclass = lisp_instance_class(obj);
     ASSERT(myclass);
-    Symbol_sp className = myclass->name();
-    cl_prin1(className, stream);
-    core::List_sp alist = obj->encode();
+    Symbol_sp className = myclass->_className();
+    cl__prin1(className, stream);
+    core::List_sp alist = core__encode(obj);
     for (auto cur : alist) {
       Cons_sp entry = gc::As<Cons_sp>(oCar(cur));
       Symbol_sp key = gc::As<Symbol_sp>(oCar(entry));
       T_sp val = oCdr(entry);
-      clasp_write_char(' ', stream);
-      cl_prin1(key, stream);
-      clasp_finish_output(stream);
-      clasp_write_char(' ', stream);
-      cl_prin1(val, stream);
+      stream_write_char(stream, ' ');
+      cl__prin1(key, stream);
+      stream_finish_output(stream);
+      stream_write_char(stream, ' ');
+      cl__prin1(val, stream);
     }
-    clasp_write_char(' ', stream);
-    clasp_write_char(')', stream);
-    clasp_finish_output(stream);
+    stream_write_char(stream, ' ');
+    stream_write_char(stream, ')');
+    stream_finish_output(stream);
   } else {
-    SIMPLE_ERROR(BF("Object does not provide fields"));
+    SIMPLE_ERROR("Object does not provide fields");
   }
   return obj;
 }
 
-#define ARGS_af_lowLevelDescribe "(arg)"
-#define DECL_af_lowLevelDescribe ""
-#define DOCS_af_lowLevelDescribe "lowLevelDescribe"
-void af_lowLevelDescribe(T_sp obj) {
-  _G();
-  if (obj.nilp()) {
-    printf("NIL\n");
-    return;
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(lowLevelDescribe)dx");
+DOCGROUP(clasp);
+CL_DEFUN void core__low_level_describe(T_sp obj) {
+  if (obj.generalp()) {
+    General_sp gobj(obj.unsafe_general());
+    if (gobj.nilp()) {
+      printf("NIL\n");
+      return;
+    }
+    gobj->describe(_lisp->_true());
+  } else if (obj.consp()) {
+    obj.unsafe_cons()->describe(_lisp->_true());
+  } else {
+    SIMPLE_ERROR("Add support to low-level-describe for object");
   }
-  obj->describe(_lisp->_true());
 };
 
-#define ARGS_af_copyTree "(arg)"
-#define DECL_af_copyTree ""
-#define DOCS_af_copyTree "copyTree"
-T_sp af_copyTree(T_sp arg) {
-  _G();
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(copyTree)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__copy_tree(T_sp arg) {
   if (arg.nilp())
-    return _Nil<T_O>();
+    return nil<T_O>();
   if (Cons_sp c = arg.asOrNull<Cons_O>()) {
     return c->copyTree();
   }
   return arg;
 };
 
-#define ARGS_af_implementationClass "(arg)"
-#define DECL_af_implementationClass ""
-#define DOCS_af_implementationClass "implementationClass"
-T_sp af_implementationClass(T_sp arg) {
-  _G();
-  return lisp_static_class(arg);
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(implementationClass)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__implementation_class(T_sp arg) { return lisp_static_class(arg); };
+
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(instanceClass)dx");
+DOCGROUP(clasp);
+CL_DEFUN Instance_sp core__instance_class(T_sp arg) { return lisp_instance_class(arg); };
+
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(classNameAsString)dx");
+DOCGROUP(clasp);
+CL_DEFUN string core__class_name_as_string(T_sp arg) {
+  Instance_sp c = core__instance_class(arg);
+  return c->_className()->fullName();
 };
 
-#define ARGS_af_instanceClass "(arg)"
-#define DECL_af_instanceClass ""
-#define DOCS_af_instanceClass "instanceClass"
-Class_sp af_instanceClass(T_sp arg) {
-  _G();
-  return lisp_instance_class(arg);
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(instanceSig)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__instance_sig(T_sp obj) {
+  if (obj.generalp()) {
+    return obj.unsafe_general()->instanceSig();
+  }
+  IMPLEMENT_MEF("Implement for non-general objects");
 };
 
-#define ARGS_af_classNameAsString "(arg)"
-#define DECL_af_classNameAsString ""
-#define DOCS_af_classNameAsString "classNameAsString"
-string af_classNameAsString(T_sp arg) {
-  _G();
-  Class_sp c = af_instanceClass(arg);
-  return c->name()->fullName();
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(instanceSigSet)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__instance_sig_set(T_sp arg) {
+  if (arg.generalp()) {
+    return arg.unsafe_general()->instanceSigSet();
+  }
+  IMPLEMENT_MEF("Implement for non-general objects");
 };
 
-#define ARGS_af_instanceSig "(arg)"
-#define DECL_af_instanceSig ""
-#define DOCS_af_instanceSig "instanceSig"
-T_sp af_instanceSig(T_sp obj) {
-  _G();
-  return obj->instanceSig();
+CL_NAME("INSTANCE-REF");
+CL_LAMBDA(val obj idx);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(set the (idx) slot of (obj) to (val))dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp core__instance_set(T_sp val, T_sp obj, int idx) {
+  if (obj.generalp()) {
+    return obj.unsafe_general()->instanceSet(idx, val);
+  }
+  IMPLEMENT_MEF("Implement for non-general objects");
 };
 
-#define ARGS_af_instanceSigSet "(arg)"
-#define DECL_af_instanceSigSet ""
-#define DOCS_af_instanceSigSet "instanceSigSet"
-T_sp af_instanceSigSet(T_sp arg) {
-  _G();
-  return arg->instanceSigSet();
+CL_LAMBDA(obj idx);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(instanceRef - return the (idx) slot value of (obj))dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__instance_ref(T_sp obj, int idx) {
+  if (obj.generalp())
+    return obj.unsafe_general()->instanceRef(idx);
+  IMPLEMENT_MEF("Implement for non-general objects");
 };
 
-#define ARGS_af_instanceSet "(obj idx val)"
-#define DECL_af_instanceSet ""
-#define DOCS_af_instanceSet "instanceSet - set the (idx) slot of (obj) to (val)"
-T_sp af_instanceSet(T_sp obj, int idx, T_sp val) {
-  _G();
-  return obj->instanceSet(idx, val);
-};
-
-#define ARGS_af_instanceRef "(obj idx)"
-#define DECL_af_instanceRef ""
-#define DOCS_af_instanceRef "instanceRef - return the (idx) slot value of (obj)"
-T_sp af_instanceRef(T_sp obj, int idx) {
-  _G();
-  return obj->instanceRef(idx);
-};
-
-#define ARGS_af_instancep "(obj)"
-#define DECL_af_instancep ""
-#define DOCS_af_instancep "instancep"
-T_sp af_instancep(T_sp obj) {
-  _G();
-  return obj->oinstancep();
-};
-
-#define ARGS_af_isNil "(arg)"
-#define DECL_af_isNil ""
-#define DOCS_af_isNil "isNil"
-bool af_isNil(T_sp arg) {
-  _G();
-  return arg.nilp();
-};
-
-#define ARGS_core_encode "(arg)"
-#define DECL_core_encode ""
-#define DOCS_core_encode "encode object as an a-list"
-core::List_sp core_encode(T_sp arg) {
-  return arg->encode();
-};
-
-#define ARGS_core_decode "(obj arg)"
-#define DECL_core_decode ""
-#define DOCS_core_decode "decode object from a-list"
-T_sp core_decode(T_sp obj, core::List_sp arg) {
-  obj->decode(arg);
-  return obj;
-};
-
-void T_O::initialize() {
+void General_O::initialize() {
   // do nothing
 }
 
-void T_O::initialize(core::List_sp alist) {
+void General_O::initialize(core::List_sp alist) {
   Record_sp record = Record_O::create_initializer(alist);
-  this->fields(record);
+  if (this->fieldsp())
+    this->fields(record);
   record->errorIfInvalidArguments();
 }
 
-List_sp T_O::encode() {
-  Record_sp record = Record_O::create_encoder();
-  this->fields(record);
-  return record->data();
+void General_O::fields(Record_sp record) {
+  // Do nothing here
+  // Any subclass that has slots that need to be (de)serialized must, MUST, MUST!
+  // implement fieldsp() and fields(Record_sp node)
+  // subclasses must also invoke their Base::fields(node) method so that base classes can
+  // (de)serialize their fields.
+  // Direct base classes of General_O or CxxObject_O don't need to call Base::fields(Record_sp node)
+  //  because the base methods don't do anything.
+  // But it's convenient to always call the this->Base::fields(node) in case the class hierarchy changes
+  //  you don't want to be caught not calling a this->Base::fields(node) because the system will silently
+  //  fail to (de)serialize any base class fields.
+  // If subclasses don't implement these methods - then serialization will fail SILENTLY!!!!!
 }
 
-void T_O::decode(core::List_sp alist) {
-  Record_sp record = Record_O::create_decoder(alist);
-  this->fields(record);
+List_sp General_O::encode() {
+  if (this->fieldsp()) {
+    Record_sp record = Record_O::create_encoder();
+    this->fields(record);
+    return record->data();
+  }
+  return nil<T_O>();
 }
 
-string T_O::className() const {
-  // TODO: refactor this as ->__class()->classNameAsString
+void General_O::decode(core::List_sp alist) {
+  if (this->fieldsp()) {
+    Record_sp record = Record_O::create_decoder(alist);
+    this->fields(record);
+  }
+}
+
+string General_O::className() const {
+  // TODO: refactor this as ->__class()->_classNameAsString
   // everywhere where we have obj->className()
-  return this->__class()->classNameAsString();
+  return this->__class()->_classNameAsString();
 }
 
-void T_O::sxhash_(HashGenerator &hg) const {
-  int res = (int)((reinterpret_cast<unsigned long long int>(GC_BASE_ADDRESS_FROM_PTR(this)) >> 4) & INT_MAX);
-  hg.addPart(res);
-}
-
-/*! Return new Object but keep same contents */
-T_sp T_O::shallowCopy() const {
-  _G();
-  SUBCLASS_MUST_IMPLEMENT();
-}
-
-T_sp T_O::deepCopy() const {
-  _G();
-  SUBCLASS_MUST_IMPLEMENT();
-}
-
-bool T_O::eql_(T_sp obj) const {
-  return this->eq(obj);
-}
-
-bool T_O::equal(T_sp obj) const {
-  _G();
-  return this->eq(obj);
-}
-
-bool T_O::equalp(T_sp obj) const {
-  return this->equal(obj);
-}
-
-bool T_O::isAInstanceOf(Class_sp mc) {
-  if (this->eq(mc))
-    return true;
-  Symbol_sp classSymbol = mc->className();
-  if (this->isAssignableToByClassSymbol(classSymbol))
-    return true;
-  return false;
-}
-};
-
-void HashGenerator::hashObject(T_sp obj) {
-  clasp_sxhash(obj, *this);
-}
-
-static BignumExportBuffer static_HashGenerator_addPart_buffer;
-
-bool HashGenerator::addPart(const mpz_class &bignum) {
-  unsigned int *buffer = static_HashGenerator_addPart_buffer.getOrAllocate(bignum, 0);
-  size_t count(0);
-#ifdef DEBUG_HASH_GENERATOR
-  if (this->_debug) {
-    printf("%s:%d Adding hash bignum\n", __FILE__, __LINE__);
+void General_O::sxhash_(HashGenerator& hg) const {
+  if (hg.isFilling()) {
+    hg.addGeneralAddress(this->asSmartPtr());
   }
-#endif
-  buffer = (unsigned int *)::mpz_export(buffer, &count,
-                                        _lisp->integer_ordering()._mpz_import_word_order,
-                                        _lisp->integer_ordering()._mpz_import_size,
-                                        _lisp->integer_ordering()._mpz_import_endian,
-                                        0,
-                                        bignum.get_mpz_t());
-  if (buffer != NULL) {
-    for (int i = 0; i < (int)count; i++) {
-      this->addPart(buffer[i]);
-      if (this->isFull())
-        return false;
-    }
-  } else {
-    this->addPart(0);
+}
+
+void General_O::sxhash_equal(HashGenerator& hg) const {
+  if (!hg.isFilling())
+    return;
+  hg.addGeneralAddress(this->asSmartPtr());
+  return;
+}
+
+bool General_O::eql_(T_sp obj) const { return this->eq(obj); }
+
+bool General_O::equal(T_sp obj) const { return this->eq(obj); }
+
+bool General_O::equalp(T_sp obj) const { return this->equal(obj); }
+
+T_sp HashGenerator::asList() const {
+  ql::list l;
+  for (int ii = 0; ii < this->_NextPartIndex; ii++) {
+    l << make_fixnum(this->_Parts[ii]);
   }
-  return this->isFilling();
-}
-
-string T_O::asXmlString() const {
-  return "T_O::asXmlString() ADD SUPPORT TO DUMP OBJECTS AS XML STRINGS";
-}
-
-core::Lisp_sp T_O::lisp() {
-  return _lisp;
-}
-
-core::Lisp_sp T_O::lisp() const {
-  return _lisp;
+  return l.cons();
 }
 
 #if 0
-void	T_O::setOwner(T_sp obj)
-{
-    IMPLEMENT_MEF(BF("Handle loss of _InitializationOwner"));
-//    this->_InitializationOwner = obj;
+bool HashGenerator::addGeneralAddress(General_sp part) {
+  ASSERT(part.generalp());
+  if (this->isFull())
+    return false;
+  this->_Parts[this->_NextAddressIndex] = lisp_general_badge(part);
+  this->_NextAddressIndex--;
+  return true;
 }
 
+bool HashGenerator::addConsAddress(Cons_sp part) {
+  ASSERT(part.consp());
+  if (this->isFull()) {
+    return false;
+  }
+  this->_Parts[this->_NextAddressIndex] = lisp_badge(part);
+  this->_NextAddressIndex--;
+  return true;
+}
+#endif
+void Hash1Generator::hashObject(T_sp obj) { clasp_sxhash(obj, *this); }
 
-void	T_O::initialize_setOwner(T_sp obj)
-{
-    this->_InitializationOwner = obj;
+#if 0
+// Add an address - this may need to work with location dependency
+bool Hash1Generator::addGeneralAddress(General_sp part) {
+  ASSERT(part.generalp());
+  this->_Part = lisp_general_badge(part);
+  this->_PartIsPointer = true;
+#ifdef DEBUG_HASH_GENERATOR
+  if (this->_debug) {
+    lisp_write(fmt::format("{}:{}:{} Added part --> {}\n", __FILE__, __LINE__, __FUNCTION__, _rep_(part)));
+  }
+#endif
+  return true;
+}
+
+bool Hash1Generator::addConsAddress(Cons_sp part) {
+  ASSERT(part.consp());
+  this->_Part = lisp_badge(part);
+  this->_PartIsPointer = true;
+#ifdef DEBUG_HASH_GENERATOR
+  if (this->_debug) {
+    lisp_write(fmt::format("{}:{}:{} Added part --> {}\n", __FILE__, __LINE__, __FUNCTION__, _rep_(part)));
+  }
+#endif
+  return true;
 }
 #endif
 
-#define ARGS_af_slBoundp "(arg)"
-#define DECL_af_slBoundp ""
-#define DOCS_af_slBoundp "Return t if obj is equal to T_O::_class->unboundValue()"
-bool af_slBoundp(T_sp obj) {
-  _G();
+/*! Recursive hashing of objects need to be prevented from
+    infinite recursion.   So we keep track of the depth of
+    recursion.  clasp_sxhash will modify this->_Depth and
+    when we return we have to restore _Depth to its
+    value when it entered here. */
+void HashGenerator::hashObject(T_sp obj) {
+  int depth = this->_Depth;
+  ++this->_Depth;
+  LIKELY_if(this->_Depth < MaxDepth) clasp_sxhash(obj, *this);
+  this->_Depth = depth;
+}
+
+Fixnum bignum_hash(const mpz_class& bignum) {
+  auto bn = bignum.get_mpz_t();
+  unsigned int size = bn->_mp_size;
+  if (size < 0)
+    size = -size;
+  gc::Fixnum hash(5381);
+  for (int i = 0; i < (int)size; i++) {
+    hash = (gc::Fixnum)hash_word(hash, (uintptr_t)bn->_mp_d[i]);
+  }
+  return hash;
+}
+
+bool Hash1Generator::addValue(const mpz_class& bignum) {
+  gc::Fixnum hash = bignum_hash(bignum);
+  return this->addValue(hash);
+}
+
+bool HashGenerator::addValue(const mpz_class& bignum) {
+  gc::Fixnum hash = bignum_hash(bignum);
+  return this->addValue(hash);
+}
+
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Return t if obj is equal to T_O::_class->unboundValue())dx");
+DOCGROUP(clasp);
+CL_DEFUN bool core__sl_boundp(T_sp obj) {
   //    bool boundp = (obj.get() != T_O::___staticClass->unboundValue().get());
   bool boundp = !obj.unboundp();
 #if DEBUG_CLOS >= 2
@@ -418,257 +496,172 @@ bool af_slBoundp(T_sp obj) {
   return boundp;
 };
 
-void T_O::describe(T_sp stream) {
-  clasp_write_string(this->__str__(), stream);
-}
+void General_O::describe(T_sp stream) { clasp_write_string(this->__repr__(), stream); }
 
-void T_O::__write__(T_sp strm) const {
+void General_O::__write__(T_sp strm) const {
   if (clasp_print_readably() && this->fieldsp()) {
-    core_printCxxObject(this->asSmartPtr(), strm);
+    core__print_cxx_object(this->asSmartPtr(), strm);
   } else {
     clasp_write_string(this->__repr__(), strm);
   }
 }
 
-void T_O::setTrackName(const string &msg) {
-  _G();
-  //#ifdef	DEBUG_OBJECT_ON
-  //    this->_TrackWhenDestructed = true;
-  //    this->_TrackId = msg;
-  //#endif
-}
+string General_O::descriptionOfContents() const { return ""; };
 
-#if defined(OLD_SERIALIZE)
-void T_O::serialize(serialize::SNode node) {
-  _OF();
-  SIMPLE_ERROR(BF("T_O::serialize was invoked for an object of class[%s]\n"
-                  "- you should implement serialize  for this class so that it doesn't fall through to here") %
-               this->_instanceClass()->classNameAsString());
-}
-#endif
-
-void T_O::archiveBase(core::ArchiveP node) {
-  // Nothing to do here
-  SUBIMP();
-}
-
-bool T_O::loadFinalize(core::ArchiveP node) {
-  _G();
-  return true;
-}
-
-string T_O::descriptionOfContents() const {
-  return "";
-};
-
-string T_O::description() const {
-  _OF();
+string General_O::description() const {
   stringstream ss;
-  if (this == _lisp->_true().get()) {
+  if (this == &*(_lisp->_true())) {
     ss << "t";
   } else {
-    T_O *me_gc_safe = const_cast<T_O *>(this);
-    ss << "#<" << me_gc_safe->_instanceClass()->classNameAsString() << " ";
-
-    ss << "@" << std::hex << this << std::dec;
-    ss << ")";
-    ss << this->descriptionOfContents() << " > ";
+    General_O* me_gc_safe = const_cast<General_O*>(this);
+    ss << "#<" << me_gc_safe->_instanceClass()->_classNameAsString() << " ";
+    ss << this->descriptionOfContents() << ">";
   }
   return ss.str();
 };
 
-string T_O::descriptionNonConst() {
-  return this->description();
+T_sp General_O::instanceRef(size_t idx) const {
+  SIMPLE_ERROR("T_O::instanceRef({}) invoked on object class[{}] val-->{}", idx, this->_instanceClass()->_classNameAsString(),
+               this->__repr__());
 }
 
-bool T_O::isAssignableToByClassSymbol(Symbol_sp ancestorClassSymbol) const {
-  T_sp ancestorClass = eval::funcall(cl::_sym_findClass, ancestorClassSymbol, _lisp->_true());
-  Class_sp myClass = this->__class();
-  bool b = af_subclassp(myClass, ancestorClass);
-  return b;
+T_sp General_O::instanceClassSet(Instance_sp val) {
+  SIMPLE_ERROR("T_O::instanceClassSet to class {} invoked on object class[{}] val-->{} - subclass must implement", _rep_(val),
+               this->_instanceClass()->_classNameAsString(), _rep_(this->asSmartPtr()));
 }
 
-bool T_O::isAssignableToClass(core::Class_sp mc) const {
-  return this->isAssignableToByClassSymbol(mc->className());
+T_sp General_O::instanceSet(size_t idx, T_sp val) {
+  SIMPLE_ERROR("T_O::instanceSet({},{}) invoked on object class[{}] val-->{}", idx, _rep_(val),
+               this->_instanceClass()->_classNameAsString(), _rep_(this->asSmartPtr()));
 }
 
-#if 0
-bool T_O::isOfClassByClassSymbol(Symbol_sp classSymbol)
-{_G();
-    Class_sp mc = _lisp->classFromClassSymbol(classSymbol);
-    Class_sp myClass = this->__class();
-    bool sameClass = (myClass.get() == mc.get() );
-    LOG(BF("Checking if this->_class(%s) == other class(%s) --> %d") % myClass->instanceClassName() % mc->instanceClassName() % sameClass );
-    return sameClass;
-}
-#endif
-
-void T_O::initializeSlots(int slots) {
-  SIMPLE_ERROR(BF("T_O::initializeSlots invoked - subclass must implement"));
-};
-
-T_sp T_O::instanceRef(int idx) const {
-  _G();
-  SIMPLE_ERROR(BF("T_O::instanceRef(%d) invoked on object class[%s] val-->%s") % idx % this->_instanceClass()->classNameAsString() % this->__repr__());
+T_sp General_O::instanceSig() const {
+  SIMPLE_ERROR("T_O::instanceSig() invoked on object class[{}] val-->{}", this->_instanceClass()->_classNameAsString(),
+               this->__repr__());
 }
 
-T_sp T_O::instanceClassSet(Class_sp val) {
-  _G();
-  SIMPLE_ERROR(BF("T_O::instanceClassSet to class %s invoked on object class[%s] val-->%s - subclass must implement") % _rep_(val) % this->_instanceClass()->classNameAsString() % _rep_(this->asSmartPtr()));
+T_sp General_O::instanceSigSet() {
+  SIMPLE_ERROR("T_O::instanceSigSet() invoked on object class[{}] val-->{}", this->_instanceClass()->_classNameAsString(),
+               _rep_(this->asSmartPtr()));
 }
 
-T_sp T_O::instanceSet(int idx, T_sp val) {
-  _G();
-  SIMPLE_ERROR(BF("T_O::instanceSet(%d,%s) invoked on object class[%s] val-->%s") % idx % _rep_(val) % this->_instanceClass()->classNameAsString() % _rep_(this->asSmartPtr()));
-}
+Instance_sp instance_class(T_sp obj) { return cl__class_of(obj); }
 
-T_sp T_O::instanceSig() const {
-  _G();
-  SIMPLE_ERROR(BF("T_O::instanceSig() invoked on object class[%s] val-->%s") % this->_instanceClass()->classNameAsString() % this->__repr__());
-}
+SYMBOL_SC_(CorePkg, slBoundp);
+SYMBOL_SC_(CorePkg, instanceRef);
+SYMBOL_SC_(CorePkg, instanceSet);
+SYMBOL_EXPORT_SC_(CorePkg, instancep); // move to predicates.cc?
+SYMBOL_SC_(CorePkg, instanceSigSet);
+SYMBOL_SC_(CorePkg, instanceSig);
+SYMBOL_EXPORT_SC_(CorePkg, instanceClass);
+SYMBOL_EXPORT_SC_(CorePkg, implementationClass);
+SYMBOL_EXPORT_SC_(CorePkg, classNameAsString);
+SYMBOL_EXPORT_SC_(ClPkg, copyTree);
 
-T_sp T_O::instanceSigSet() {
-  _G();
-  SIMPLE_ERROR(BF("T_O::instanceSigSet() invoked on object class[%s] val-->%s") % this->_instanceClass()->classNameAsString() % _rep_(this->asSmartPtr()));
-}
-
-#define ARGS_core_deepCopy "(obj)"
-#define DECL_core_deepCopy ""
-#define DOCS_core_deepCopy "deepCopy"
-T_sp core_deepCopy(T_sp obj) {
-  return obj->deepCopy();
-}
-
-void T_O::exposeCando(core::Lisp_sp lisp) {
-  class_<T_O> ot;
-  Defun(lowLevelDescribe);
-  SYMBOL_SC_(CorePkg, slBoundp);
-  Defun(slBoundp);
-  CoreDefun(deepCopy);
-  SYMBOL_SC_(CorePkg, isNil);
-  Defun(isNil);
-  SYMBOL_SC_(CorePkg, instanceRef);
-  Defun(instanceRef);
-  SYMBOL_SC_(CorePkg, instanceSet);
-  Defun(instanceSet);
-  SYMBOL_SC_(CorePkg, instancep);
-  Defun(instancep);
-  SYMBOL_SC_(CorePkg, instanceSigSet);
-  Defun(instanceSigSet);
-  SYMBOL_SC_(CorePkg, instanceSig);
-  Defun(instanceSig);
-  SYMBOL_EXPORT_SC_(CorePkg, instanceClass);
-  Defun(instanceClass);
-  SYMBOL_EXPORT_SC_(CorePkg, implementationClass);
-  Defun(implementationClass);
-  SYMBOL_EXPORT_SC_(CorePkg, classNameAsString);
-  Defun(classNameAsString);
-  SYMBOL_EXPORT_SC_(ClPkg, copyTree);
-  Defun(copyTree);
-  CoreDefun(encode);
-  CoreDefun(decode);
-};
-
-void T_O::exposePython(Lisp_sp lisp) { // lisp will be undefined - don't use it
-#ifdef USEBOOSTPYTHON
-  boost::python::class_<T_O, T_sp,
-                        boost::noncopyable>("Object", boost::python::no_init)
-      //    	.def("class",&T_O::_class)
-      //	.def("instanceBaseClass",&T_O::instanceBaseClass)
-      .def("classSymbol", &T_O::classSymbol)
-      .def("describe", &T_O::describe)
-      .def("description", &T_O::descriptionNonConst)
-      .def("core:className", &T_O::className_notConst)
-      .def("classNameSymbol", &T_O::classNameSymbol)
-      //	.def("baseClassSymbol",&T_O::baseClassSymbol)
-      .def("sameAs", &T_O::sameAs)
-      //	.def("atom", &T_O::atomp)
-      .def("consp", &T_O::consP)
-      .def("sourceCodeConsP", &T_O::sourceCodeConsP)
-      .def("vectorp", &T_O::vectorP)
-      .def("symbolp", &T_O::symbolP)
-      .def("numberp", &T_O::numberP)
-      .def("stringp", &T_O::stringP)
-      .def("booleanp", &T_O::booleanP)
-      .def("specialFormp", &T_O::specialFormP)
-      .def("isNil", &T_O::isNil)
-      //	.def("notNil",&T_O::notNil)
-      .def("eq", &T_O::eq)
-      //	.def("eql", &T_O::eql)
-      .def("eqn", &T_O::eqn)
-      //	.def("equal", &T_O::equal)
-      .def("equalp", &T_O::equalp)
-      .def("neq", &T_O::neql)
-      .def("lt", &T_O::operator<)
-      .def("shallowCopy", &T_O::shallowCopy)
-      .def("deepCopy", &T_O::deepCopy)
-
-      .def("car", &T_O::ocar)
-      .def("cdr", &T_O::ocdr)
-      .def("caar", &T_O::ocaar)
-      .def("cadr", &T_O::ocadr)
-      .def("cdar", &T_O::ocdar)
-      .def("cddr", &T_O::ocddr)
-      .def("caaar", &T_O::ocaaar)
-      .def("caadr", &T_O::ocaadr)
-      .def("cadar", &T_O::ocadar)
-      .def("caddr", &T_O::ocaddr)
-      .def("cdaar", &T_O::ocdaar)
-      .def("cdadr", &T_O::ocdadr)
-      .def("cddar", &T_O::ocddar)
-      .def("cdddr", &T_O::ocdddr)
-      .def("caaaar", &T_O::ocaaaar)
-      .def("caadar", &T_O::ocaadar)
-      .def("cadaar", &T_O::ocadaar)
-      .def("caddar", &T_O::ocaddar)
-      .def("cdaaar", &T_O::ocdaaar)
-      .def("cdadar", &T_O::ocdadar)
-      .def("cddaar", &T_O::ocddaar)
-      .def("cdddar", &T_O::ocdddar)
-      .def("caaadr", &T_O::ocaaadr)
-      .def("caaddr", &T_O::ocaaddr)
-      .def("cadadr", &T_O::ocadadr)
-      .def("cadddr", &T_O::ocadddr)
-      .def("cdaadr", &T_O::ocdaadr)
-      .def("cdaddr", &T_O::ocdaddr)
-      .def("cddadr", &T_O::ocddadr)
-      .def("cddddr", &T_O::ocddddr)
-
-      .def("first", &T_O::ocar)
-      .def("rest", &T_O::ocdr)
-
-      .def("first", &T_O::ofirst)
-      .def("second", &T_O::osecond)
-      .def("third", &T_O::othird)
-      .def("fourth", &T_O::ofourth)
-      .def("fifth", &T_O::ofifth)
-      .def("sixth", &T_O::osixth)
-      .def("seventh", &T_O::oseventh)
-      .def("eighth", &T_O::oeighth)
-      .def("ninth", &T_O::oninth)
-      .def("tenth", &T_O::otenth)
-
-      ;
-#endif
-}
-
-namespace core {
-
-EXPOSE_CLASS(core, T_O);
+;
 
 #include <clasp/core/multipleValues.h>
 
-void initialize_object() {
-  SYMBOL_EXPORT_SC_(ClPkg, eq);
-  ClDefun(eq);
-  SYMBOL_EXPORT_SC_(ClPkg, eql);
-  ClDefun(eql);
-  SYMBOL_EXPORT_SC_(ClPkg, equal);
-  ClDefun(equal);
-  SYMBOL_EXPORT_SC_(ClPkg, equalp);
-  ClDefun(equalp);
-  CoreDefun(printCxxObject);
-  CoreDefun(makeCxxObject);
-  CoreDefun(fieldsp);
+SYMBOL_EXPORT_SC_(ClPkg, eq);
+SYMBOL_EXPORT_SC_(ClPkg, eql);
+SYMBOL_EXPORT_SC_(ClPkg, equal);
+SYMBOL_EXPORT_SC_(ClPkg, equalp);
+}; // namespace core
+
+namespace core {
+
+void lisp_setStaticClass(gctools::Header_s::StampWtagMtag header, Instance_sp value) {
+  if (_lisp->_Roots.staticClassesUnshiftedNowhere.size() == 0) {
+    ASSERT(gctools::Header_s::StampWtagMtag::is_unshifted_stamp(gctools::STAMPWTAG_max));
+    size_t stamp = gctools::Header_s::StampWtagMtag::make_nowhere_stamp(gctools::STAMPWTAG_max);
+    //    printf("%s:%d:%s allocating %lu entries for stamp classes STAMWTAG_max %lu\n", __FILE__, __LINE__, __FUNCTION__, stamp,
+    //    (size_t)gctools::STAMPWTAG_max );
+    _lisp->_Roots.staticClassesUnshiftedNowhere.resize(stamp + 1);
+  }
+  size_t stamp = gctools::Header_s::Stamp(header);
+  //  printf("%s:%d:%s header: %u  stamp: %lu  value: %s\n", __FILE__, __LINE__, __FUNCTION__, header, stamp, _rep_(value).c_str());
+  _lisp->_Roots.staticClassesUnshiftedNowhere[stamp] = value;
+}
+
+void lisp_setStaticClassSymbol(gctools::Header_s::StampWtagMtag header, Symbol_sp value) {
+  //  printf("%s:%d:%s  gctools::STAMP_max -> %u\n", __FILE__, __LINE__, __FUNCTION__, gctools::STAMP_max);
+  if (_lisp->_Roots.staticClassSymbolsUnshiftedNowhere.size() == 0) {
+    ASSERT(gctools::Header_s::StampWtagMtag::is_unshifted_stamp(gctools::STAMPWTAG_max));
+    size_t stamp = gctools::Header_s::StampWtagMtag::make_nowhere_stamp(gctools::STAMPWTAG_max);
+    //    printf("%s:%d:%s allocating %lu entries for stamp classes STAMWTAG_max %lu\n", __FILE__, __LINE__, __FUNCTION__, stamp,
+    //    (size_t)gctools::STAMPWTAG_max );
+    _lisp->_Roots.staticClassSymbolsUnshiftedNowhere.resize(stamp + 1);
+  }
+  size_t stamp = gctools::Header_s::Stamp(header);
+  _lisp->_Roots.staticClassSymbolsUnshiftedNowhere[stamp] = value;
+  //  printf("%s:%d:%s stamp: %lu  value: %s@%p\n", __FILE__, __LINE__, __FUNCTION__, stamp, _rep_(value).c_str(),
+  //  &_lisp->_Roots.staticClassSymbolsUnshiftedNowhere[stamp]);
+}
+Symbol_sp lisp_getStaticClassSymbol(gctools::Header_s::StampWtagMtag header) {
+  size_t stamp = gctools::Header_s::Stamp(header);
+  T_sp value = _lisp->_Roots.staticClassSymbolsUnshiftedNowhere[stamp];
+  //  printf("%s:%d:%s stamp: %lu  value: %s@%p\n", __FILE__, __LINE__, __FUNCTION__, stamp, _rep_(value).c_str(),
+  //  &_lisp->_Roots.staticClassSymbolsUnshiftedNowhere[stamp]);
+  Symbol_sp svalue = gc::As<Symbol_sp>(value);
+  return svalue;
+}
+
+void lisp_setStaticInstanceCreator(gctools::Header_s::StampWtagMtag header, Creator_sp value) {
+  if (_lisp->_Roots.staticInstanceCreatorsUnshiftedNowhere.size() == 0) {
+    size_t stamp = gctools::Header_s::StampWtagMtag::make_nowhere_stamp(gctools::STAMPWTAG_max);
+    _lisp->_Roots.staticInstanceCreatorsUnshiftedNowhere.resize(stamp + 1);
+  }
+  size_t stamp = gctools::Header_s::Stamp(header);
+  _lisp->_Roots.staticInstanceCreatorsUnshiftedNowhere[stamp] = value;
+}
+
+Instance_sp lisp_getStaticClass(gctools::Header_s::StampWtagMtag header) {
+  size_t stamp = gctools::Header_s::Stamp(header);
+  Instance_sp class_ = _lisp->_Roots.staticClassesUnshiftedNowhere[stamp];
+  // printf("%s:%d:%s stamp = %lu   class_ = %s\n", __FILE__, __LINE__, __FUNCTION__, stamp, _rep_(class_).c_str());
+  return class_;
+}
+Creator_sp lisp_getStaticInstanceCreator(gctools::Header_s::StampWtagMtag header) {
+  size_t stamp = gctools::Header_s::Stamp(header);
+  return _lisp->_Roots.staticInstanceCreatorsUnshiftedNowhere[stamp];
+}
+
+}; // namespace core
+
+namespace core {
+
+CL_LAMBDA(x y);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(equalp)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool cl__equalp(T_sp x, T_sp y) {
+  if (x.fixnump()) {
+    if (y.fixnump()) {
+      return x.raw_() == y.raw_();
+    } else if (y.single_floatp()) {
+      return (x.unsafe_fixnum() == y.unsafe_single_float());
+    } else if (gc::IsA<Number_sp>(y)) {
+      return basic_equalp(gc::As_unsafe<Fixnum_sp>(x), gc::As_unsafe<Number_sp>(y));
+    } else
+      return false;
+  } else if (x.single_floatp()) {
+    if (y.single_floatp()) {
+      return x.unsafe_single_float() == y.unsafe_single_float();
+    } else if (y.fixnump()) {
+      return x.unsafe_single_float() == y.unsafe_fixnum();
+    } else if (gc::IsA<Number_sp>(y)) {
+      return basic_equalp(gc::As_unsafe<SingleFloat_sp>(x), gc::As_unsafe<Number_sp>(y));
+    } else
+      return false;
+  } else if (x.characterp()) {
+    return clasp_charEqual2(x, y);
+  } else if (x.consp()) {
+    Cons_O* cons = x.unsafe_cons();
+    return cons->equalp(y);
+  } else if (x.generalp()) {
+    General_O* genx = x.unsafe_general();
+    return genx->equalp(y);
+  }
+  SIMPLE_ERROR("Bad equalp comparison");
 };
-};
+}; // namespace core

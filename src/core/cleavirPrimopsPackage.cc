@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -33,22 +33,24 @@ THE SOFTWARE.
 #include <clasp/core/multipleValues.h>
 #include <clasp/core/package.h>
 
-namespace cleavirPrimops {
+namespace cleavirPrimop {
 
-#pragma GCC visibility push(default)
-#define CleavirPrimopsPkg_SYMBOLS
-#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
-#include SYMBOLS_SCRAPED_INC_H
-#undef DO_SYMBOL
-#undef CleavirPrimopsPkg_SYMBOLS
-#pragma GCC visibility pop
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, typeq);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, callWithVariableBound);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, eq);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, fixnumLess);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, fixnumNotGreater);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, fixnumEqual);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, car);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, cdr);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, funcall);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, unreachable);
+SYMBOL_EXPORT_SC_(CleavirPrimopPkg, case);
 
-SYMBOL_EXPORT_SC_(CleavirPrimopsPkg, callWithVariableBound);
-
-void initialize_cleavirPrimopsPackage() {
+void initialize_cleavirPrimopPackage() {
   list<string> lnicknames;
   list<string> luse = {};
-  _lisp->makePackage(CleavirPrimopsPkg, lnicknames, luse);
+  _lisp->makePackage(CleavirPrimopPkg, lnicknames, luse);
   // We don't have to create the CLEAVIR-PRIMOPS symbols here - it's done in bootStrapCoreSymbolMap
 }
-};
+}; // namespace cleavirPrimop

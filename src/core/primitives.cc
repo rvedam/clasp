@@ -24,394 +24,482 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <pthread.h> // TODO: PORTING - frgo, 2017-08-04
+#include <signal.h>  // TODO: PORTING - frgo, 2017-08-04
+#include <sys/utsname.h>
+#include <clasp/external/PicoSHA2/picosha2.h>
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/cons.h>
 #include <clasp/core/corePackage.h>
-#include <clasp/core/environment.h>
+#include <clasp/core/bytecode_compiler.h> // Lexenv
 #include <clasp/core/fileSystem.h>
 #include <clasp/core/bformat.h>
 #include <clasp/core/bignum.h>
+#include <clasp/core/sysprop.h>
 #include <clasp/core/character.h>
-#include <clasp/core/executables.h>
+#include <clasp/core/array.h>
 #include <clasp/core/package.h>
 #include <clasp/core/readtable.h>
-#include <clasp/core/vectorObjectsWithFillPtr.h>
 #include <clasp/core/instance.h>
+#include <clasp/core/funcallableInstance.h>
 #include <clasp/core/backquote.h>
 #include <clasp/core/sequence.h>
-#include <clasp/core/structureObject.h>
 #include <clasp/core/wrappedPointer.h>
-#include <clasp/core/bitVector.h>
 #include <clasp/core/pathname.h>
 #include <clasp/core/unixfsys.h>
 #include <clasp/core/predicates.h>
-#include <clasp/core/genericFunction.h>
 #include <clasp/core/pointer.h>
-#include <clasp/core/lispMath.h>
 #include <clasp/core/symbolTable.h>
+// #include <clasp/core/clcenv.h>
 #include <clasp/core/null.h>
-//#include "debugger.h"
+#include <clasp/core/debugger.h>
 #include <clasp/core/ql.h>
-#include <clasp/core/str.h>
 #include <clasp/core/numbers.h>
 #include <clasp/core/evaluator.h>
 #include <clasp/core/compiler.h>
 #include <clasp/core/print.h>
-#include <clasp/core/standardClass.h>
-#include <clasp/core/forwardReferencedClass.h>
 #include <clasp/core/singleDispatchMethod.h>
 #include <clasp/core/singleDispatchGenericFunction.h>
 #include <clasp/core/lambdaListHandler.h>
 #include <clasp/core/designators.h>
 #include <clasp/core/primitives.h>
+#include <clasp/core/numberToString.h>
 #include <clasp/core/hashTable.h>
 #include <clasp/core/hashTableEql.h>
 #include <clasp/core/multipleValues.h>
 #include <clasp/core/lispStream.h>
-#include <clasp/core/structureObject.h>
 #include <clasp/core/lispReader.h>
 #include <clasp/core/designators.h>
-#include <clasp/core/profile.h>
 #include <clasp/core/wrappers.h>
+#include <version.h>
+#include <llvm/Config/llvm-config.h>
+
+#define DEBUG_LEVEL_NONE
+
 namespace core {
 
-#define ARGS_cl_sleep "(seconds)"
-#define DECL_cl_sleep ""
-#define DOCS_cl_sleep "sleep"
-void cl_sleep(T_sp oseconds) {
-  _G();
-  SYMBOL_EXPORT_SC_(ClPkg, sleep);
-  if (oseconds.nilp()) {
-    ERROR_WRONG_TYPE_ONLY_ARG(cl::_sym_sleep, oseconds, cl::_sym_Number_O);
-  }
-  double dsec = clasp_to_double(gc::As<Real_sp>(oseconds));
-  if (dsec < 0.0) {
-    SIMPLE_ERROR(BF("You cannot sleep for < 0 seconds"));
-  }
+std::string global_startupSourceName = "";
+StartupEnum global_startupEnum = undefined;
+
+int clasp_musleep(double dsec, bool alertable) {
   double seconds = floor(dsec);
   double frac_seconds = dsec - seconds;
   double nanoseconds = (frac_seconds * 1000000000.0);
   timespec ts;
   ts.tv_sec = seconds;
   ts.tv_nsec = nanoseconds;
-  nanosleep(&ts, NULL);
+  int code;
+AGAIN:
+  code = nanosleep(&ts, &ts);
+  int old_errno = errno;
+  gctools::handle_all_queued_interrupts();
+  {
+    if (code < 0 && old_errno == EINTR && !alertable) {
+      goto AGAIN;
+    } else if (code < 0) {
+      printf("%s:%d nanosleep returned code = %d  errno = %d\n", __FILE__, __LINE__, code, errno);
+    }
+  }
+  return code;
 }
 
-#define ARGS_cl_lispImplementationType "()"
-#define DECL_cl_lispImplementationType ""
-#define DOCS_cl_lispImplementationType "lispImplementationType"
-T_sp cl_lispImplementationType() {
-  _G();
-  return Str_O::create("Clasp");
+CL_LAMBDA(seconds);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(sleep)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__sleep(Real_sp oseconds) {
+  // seconds - a non-negative real.
+  SYMBOL_EXPORT_SC_(ClPkg, sleep);
+  double dsec = clasp_to_double(oseconds);
+  if (dsec < 0.0) {
+    TYPE_ERROR(oseconds, Cons_O::createList(cl::_sym_float, clasp_make_single_float(0.0)));
+  }
+  [[maybe_unused]] int retval = clasp_musleep(dsec, false);
+  return nil<T_O>();
+}
+
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(A list of all symbols defined in C++)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__interpreter_symbols() {
+  List_sp ls = nil<T_O>();
+
+#ifndef SCRAPING
+#define DO_SYMBOL(package, name, _a, _b, _c, _d) ls = Cons_O::create(package::name, ls);
+
+#define ClPkg_SYMBOLS
+#define AstToolingPkg_SYMBOLS
+#define CorePkg_SYMBOLS
+#define ExtPkg_SYMBOLS
+#define LlvmoPkg_SYMBOLS
+#define ClbindPkg_SYMBOLS
+#define MpPkg_SYMBOLS
+#define KeywordPkg_SYMBOLS
+#define Clasp_ffi_pkg_SYMBOLS
+#define SocketsPkg_SYMBOLS
+#define ServeEventPkg_SYMBOLS
+#define CompPkg_SYMBOLS
+#define CleavirEnvPkg_SYMBOLS
+#define CleavirPrimopPkg_SYMBOLS
+#define ClosPkg_SYMBOLS
+#define GrayPkg_SYMBOLS
+#define ClcenvPkg_SYMBOLS
+#define GcToolsPkg_SYMBOLS
+
+#include SYMBOLS_SCRAPED_INC_H
+
+#undef ClPkg_SYMBOLS
+#undef AstToolingPkg_SYMBOLS
+#undef CorePkg_SYMBOLS
+#undef ExtPkg_SYMBOLS
+#undef LlvmoPkg_SYMBOLS
+#undef ClbindPkg_SYMBOLS
+#undef MpPkg_SYMBOLS
+#undef KeywordPkg_SYMBOLS
+#undef Clasp_ffi_pkg_SYMBOLS
+#undef SocketsPkg_SYMBOLS
+#undef ServeEventPkg_SYMBOLS
+#undef CompPkg_SYMBOLS
+#undef CleavirEnvPkg_SYMBOLS
+#undef CleavirPrimopPkg_SYMBOLS
+#undef ClosPkg_SYMBOLS
+#undef GrayPkg_SYMBOLS
+#undef ClcenvPkg_SYMBOLS
+#undef GcToolsPkg_SYMBOLS
+
+#undef DO_SYMBOL
+#endif // #ifndef SCRAPING
+  return ls;
+}
+
+std::atomic<int64_t> global_next_number;
+
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Return the next number.  An internal counter is incremented every time this function is called.)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__next_number() {
+  int64_t num, next_num;
+  do {
+    num = global_next_number;
+    next_num = num + 1;
+    if ((next_num << gctools::fixnum_shift) <= 0) { // if it wraps it won't fit in a positive fixnum
+      next_num = 1;
+    }
+  } while (!global_next_number.compare_exchange_weak(num, next_num));
+  return core::clasp_make_fixnum(next_num);
 };
 
-#define ARGS_cl_lispImplementationVersion "()"
-#define DECL_cl_lispImplementationVersion ""
-#define DOCS_cl_lispImplementationVersion "lispImplementationVersion"
-T_sp cl_lispImplementationVersion() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(lispImplementationType)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__lisp_implementation_type() { return SimpleBaseString_O::make(gctools::program_name()); };
+
+SYMBOL_EXPORT_SC_(KeywordPkg, eclasp);
+
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(lisp-implementation-version)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__lisp_implementation_version() {
   stringstream ss;
-  List_sp cleavir = gc::As<Cons_sp>(cl::_sym_STARfeaturesSTAR->symbolValue())->memberEq(kw::_sym_cclasp);
-  if (cleavir.notnilp()) {
-    ss << "cclasp-";
+  List_sp eclasp = gc::As<Cons_sp>(cl::_sym_STARfeaturesSTAR->symbolValue())->memberEq(kw::_sym_eclasp);
+  List_sp cclasp = gc::As<Cons_sp>(cl::_sym_STARfeaturesSTAR->symbolValue())->memberEq(kw::_sym_cclasp);
+  List_sp cst = gc::As<Cons_sp>(cl::_sym_STARfeaturesSTAR->symbolValue())->memberEq(kw::_sym_cst);
+  if (eclasp.notnilp()) {
+    ss << "e";
+  } else if (cclasp.notnilp()) {
+    ss << "c";
   }
-#ifdef USE_MPS
+  ss << gctools::program_name();
+  ss << "-";
+#if defined(USE_MPS)
   ss << "mps-";
-#endif
-#ifdef USE_BOEHM
+#elif defined(USE_BOEHM)
+#ifdef USE_PRECISE_GC
+  ss << "boehmprecise-";
+#else
   ss << "boehm-";
 #endif
+#elif defined(USE_MMTK)
+#ifdef USE_PRECISE_GC
+  ss << "mmtkprecise-";
+#else
+  ss << "mmtk-";
+#endif
+#endif
+#ifdef RUNNING_PRECISEPREP
+  ss << "mpsprep-";
+#endif
   ss << CLASP_VERSION;
-  return Str_O::create(ss.str());
+  if (cst.notnilp())
+    ss << "-cst";
+  else
+    ss << "-non-cst";
+  return SimpleBaseString_O::make(ss.str());
 };
 
-#define ARGS_core_method_cache_resize "(pow)"
-#define DECL_core_method_cache_resize ""
-#define DOCS_core_method_cache_resize "cache_resize - Resize the cache to 2^pow"
-void core_method_cache_resize(Fixnum_sp pow) {
-  if (pow < 2 || pow > 64) {
-    SIMPLE_ERROR(BF("Cache power must be in the range of 2...64"));
-  }
-  size_t size = 1 << pow;
-  return _lisp->_Roots._MethodCachePtr->setup(Lisp_O::MaxFunctionArguments, size);
-}
-
-#define ARGS_core_slot_cache_resize "(pow)"
-#define DECL_core_slot_cache_resize ""
-#define DOCS_core_slot_cache_resize "cache_resize - Resize the cache to 2^pow"
-void core_slot_cache_resize(Fixnum_sp pow) {
-  if (pow < 2 || pow > 64) {
-    SIMPLE_ERROR(BF("Cache power must be in the range of 2...64"));
-  }
-  size_t size = 1 << pow;
-  return _lisp->_Roots._SlotCachePtr->setup(Lisp_O::MaxClosSlots, size);
-}
-
-#define ARGS_core_single_dispatch_method_cache_resize "(pow)"
-#define DECL_core_single_dispatch_method_cache_resize ""
-#define DOCS_core_single_dispatch_method_cache_resize "cache_resize - Resize the cache to 2^pow"
-void core_single_dispatch_method_cache_resize(Fixnum_sp pow) {
-  if (pow < 2 || pow > 64) {
-    SIMPLE_ERROR(BF("Cache power must be in the range of 2...64"));
-  }
-  size_t size = 1 << pow;
-  return _lisp->_Roots._SingleDispatchMethodCachePtr->setup(2, size);
-}
-
-#define ARGS_core_method_cache_status "()"
-#define DECL_core_method_cache_status ""
-#define DOCS_core_method_cache_status "cache_status - (values searches misses total-depth)"
-T_mv core_method_cache_status() {
-  return Values(clasp_make_fixnum(_lisp->_Roots._MethodCachePtr->_searches),
-                clasp_make_fixnum(_lisp->_Roots._MethodCachePtr->_misses),
-                clasp_make_fixnum(_lisp->_Roots._MethodCachePtr->_total_depth));
-}
-#define ARGS_core_slot_cache_status "()"
-#define DECL_core_slot_cache_status ""
-#define DOCS_core_slot_cache_status "cache_status - (values searches misses total-depth)"
-T_mv core_slot_cache_status() {
-  return Values(clasp_make_fixnum(_lisp->_Roots._SlotCachePtr->_searches),
-                clasp_make_fixnum(_lisp->_Roots._SlotCachePtr->_misses),
-                clasp_make_fixnum(_lisp->_Roots._SlotCachePtr->_total_depth));
-}
-
-#define ARGS_core_single_dispatch_method_cache_status "()"
-#define DECL_core_single_dispatch_method_cache_status ""
-#define DOCS_core_single_dispatch_method_cache_status "cache_status - (values searches misses total-depth)"
-T_mv core_single_dispatch_method_cache_status() {
-  return Values(clasp_make_fixnum(_lisp->_Roots._SingleDispatchMethodCachePtr->_searches),
-                clasp_make_fixnum(_lisp->_Roots._SingleDispatchMethodCachePtr->_misses),
-                clasp_make_fixnum(_lisp->_Roots._SingleDispatchMethodCachePtr->_total_depth));
-}
-
-#define ARGS_core_lispImplementationId "()"
-#define DECL_core_lispImplementationId ""
-#define DOCS_core_lispImplementationId "lispImplementationId - the git commit sha1 code"
-T_sp core_lispImplementationId() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(lispImplementationId - a fragment of the git commit hash code)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__lisp_implementation_id() {
+#ifdef CLASP_GIT_COMMIT
   string all = CLASP_GIT_COMMIT;
-#define RIGHT_CHARS 8
+#define RIGHT_CHARS 9
   string rightChars;
   if (all.size() > RIGHT_CHARS) {
     rightChars = all.substr(all.size() - RIGHT_CHARS);
   } else {
     rightChars = all;
   }
-  return Str_O::create(rightChars);
+  return SimpleBaseString_O::make(rightChars);
+#else
+  return nil<T_O>();
+#endif
 };
 
-#define ARGS_core_create_tagged_immediate_value_or_nil "(obj)"
-#define DECL_core_create_tagged_immediate_value_or_nil ""
-#define DOCS_core_create_tagged_immediate_value_or_nil "Convert an object, either a fixnum, character or single float into an tagged version and return as an integer (either Fixnum or Bignum) or return NIL"
-T_sp core_create_tagged_immediate_value_or_nil(T_sp object) {
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(clasp-git-full-commit - the full git commit hash code)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__clasp_git_full_commit() {
+#ifdef CLASP_GIT_FULL_COMMIT
+  string all = CLASP_GIT_FULL_COMMIT;
+  return SimpleBaseString_O::make(all);
+#else
+  return nil<T_O>();
+#endif
+};
+
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(
+    R"dx(Convert an object, either a fixnum, character or single float into an tagged version and return as an integer (either Fixnum or Bignum) or return NIL)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__create_tagged_immediate_value_or_nil(T_sp object) {
   if (object.fixnump() || object.characterp() || object.single_floatp()) {
-    return Integer_O::create((gc::Fixnum)object.raw_());
+    return Integer_O::create((Fixnum)object.raw_());
   }
-  return _Nil<T_O>();
+  return nil<T_O>();
 };
 
-#define ARGS_cl_softwareType "()"
-#define DECL_cl_softwareType ""
-#define DOCS_cl_softwareType "softwareType"
-T_sp cl_softwareType() {
-  return _Nil<T_O>();
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Convert a fixnum value that represents an immediate back into an immediate value)dx");
+CL_DOCSTRING_LONG(
+    R"dx(either a fixnum, character or single float into an tagged version and return as an integer (either Fixnum or Bignum) or return NIL)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__value_from_tagged_immediate(T_sp object) {
+  if (object.fixnump()) {
+    T_sp value((gctools::Tagged)object.unsafe_fixnum());
+    return value;
+  }
+  if (gc::IsA<Bignum_sp>(object)) {
+    size_t val = clasp_to_size_t(object);
+    T_sp value((gctools::Tagged)val);
+    return value;
+  }
+  SIMPLE_ERROR("Value must fit in fixnum");
+}
+
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(softwareType)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__software_type() {
+  struct utsname aux;
+  if (uname(&aux) < 0)
+    return nil<T_O>();
+  else
+    return SimpleBaseString_O::make(aux.sysname);
 };
 
-#define ARGS_cl_softwareVersion "()"
-#define DECL_cl_softwareVersion ""
-#define DOCS_cl_softwareVersion "softwareVersion"
-T_sp cl_softwareVersion() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(softwareVersion)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__software_version() {
   string all = CLASP_VERSION;
-  return Str_O::create(all);
+  return SimpleBaseString_O::make(all);
 };
 
-#define ARGS_cl_machineType "()"
-#define DECL_cl_machineType ""
-#define DOCS_cl_machineType "machineType"
-T_sp cl_machineType() {
-  _G();
-  return _Nil<T_O>();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(machineType)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__machine_type() {
+  struct utsname aux;
+  if (uname(&aux) < 0)
+    return nil<T_O>();
+  else
+    return SimpleBaseString_O::make(aux.machine);
 };
 
-#define ARGS_cl_machineVersion "()"
-#define DECL_cl_machineVersion ""
-#define DOCS_cl_machineVersion "machineVersion"
-T_sp cl_machineVersion() {
-  _G();
-  return _Nil<T_O>();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(machineVersion)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__machine_version() {
+  struct utsname aux;
+  if (uname(&aux) < 0)
+    return nil<T_O>();
+  else
+    return SimpleBaseString_O::make(aux.version);
 };
 
-#define ARGS_cl_machineInstance "()"
-#define DECL_cl_machineInstance ""
-#define DOCS_cl_machineInstance "machineInstance"
-T_sp cl_machineInstance() {
-  _G();
-  return _Nil<T_O>();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(machineInstance)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__machine_instance() {
+  struct utsname aux;
+  if (uname(&aux) < 0)
+    return nil<T_O>();
+  else
+    return SimpleBaseString_O::make(aux.nodename);
 };
 
-#define ARGS_af_argc "()"
-#define DECL_af_argc ""
-#define DOCS_af_argc "argc"
-int af_argc() {
-  _G();
-  return _lisp->_Argc;
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(argc)dx");
+DOCGROUP(clasp);
+CL_DEFUN int core__argc() { return global_options->_RawArguments.size(); };
+
+CL_LAMBDA(idx);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(argv)dx");
+DOCGROUP(clasp);
+CL_DEFUN SimpleBaseString_sp core__argv(int idx) {
+  if (idx < global_options->_RawArguments.size())
+    return SimpleBaseString_O::make(global_options->_RawArguments[idx]);
+  return SimpleBaseString_O::make("");
 };
 
-#define ARGS_af_argv "(idx)"
-#define DECL_af_argv ""
-#define DOCS_af_argv "argv"
-Str_sp af_argv(int idx) {
-  _G();
-  return Str_O::create(_lisp->_Argv[idx]);
-};
-
-#define ARGS_cl_set "(sym value)"
-#define DECL_cl_set ""
-#define DOCS_cl_set "set"
-T_sp cl_set(Symbol_sp sym, T_sp val) {
-  _G();
-  if (sym.nilp()) {
-    SIMPLE_ERROR(BF("You cannot assign to the constant NIL"));
-  }
+CL_LAMBDA(sym value);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(set)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__set(Symbol_sp sym, T_sp val) {
+  if (sym->getReadOnly())
+    SIMPLE_ERROR("Cannot modify value of constant {}", _rep_(sym));
   sym->setf_symbolValue(val);
   return val;
 };
 
-#define ARGS_af_dumpAddressOf "(arg)"
-#define DECL_af_dumpAddressOf ""
-#define DOCS_af_dumpAddressOf "dumpAddressOf"
-void af_dumpAddressOf(T_sp arg) {
-  _G();
+CL_LAMBDA(arg &optional msg);
+CL_DECLARE();
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__print_address_of(T_sp arg, T_sp msg) {
   ASSERT(arg.objectp());
-  void *ptr = &(*arg);
-  printf("%s:%d  AddressOf = %p\n", __FILE__, __LINE__, ptr);
+  void* ptr = &(*arg);
+  printf("%s:%d  AddressOf = %p msg: %s\n", __FILE__, __LINE__, ptr, _rep_(msg).c_str());
+  return arg;
 };
 
-#define ARGS_af_incompleteNextHigherPowerOf_2 "(arg)"
-#define DECL_af_incompleteNextHigherPowerOf_2 ""
-#define DOCS_af_incompleteNextHigherPowerOf_2 "incompleteNextHigherPowerOf_2 - see the incompleteNextHigherPowerOf_2 builtin - only works for Fixnums and not the full range; just for testing"
-int af_incompleteNextHigherPowerOf_2(Fixnum_sp fn) {
-  _G();
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(
+    R"dx(Ssee the incomplete-next-higher-power-of-2 builtin - only works for Fixnums and not the full range; just for testing)dx");
+DOCGROUP(clasp);
+CL_DEFUN int core__incomplete_next_higher_power_of_2(Fixnum_sp fn) {
   unsigned int f = unbox_fixnum(fn);
   return 1 << ((sizeof(f) * 8) - __builtin_clz(f));
 };
 
-#define ARGS_af_allRegisteredClassNames "()"
-#define DECL_af_allRegisteredClassNames ""
-#define DOCS_af_allRegisteredClassNames "allRegisteredClassNames"
-Vector_sp af_allRegisteredClassNames() {
-  _G();
-  VectorObjects_sp vo = VectorObjects_O::make(_Nil<T_O>(), _Nil<T_O>(), _lisp->classSymbolsHolder().size(), false, cl::_sym_T_O);
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(allRegisteredClassNames)dx");
+DOCGROUP(clasp);
+CL_DEFUN Vector_sp core__all_registered_class_names() {
+  ComplexVector_T_sp vo = ComplexVector_T_O::make(_lisp->classSymbolsHolder().size(), nil<T_O>());
   for (int i(0), iEnd(_lisp->classSymbolsHolder().size()); i < iEnd; ++i) {
-    vo->setf_elt(i, _lisp->classSymbolsHolder()[i]);
+    vo->rowMajorAset(i, _lisp->classSymbolsHolder()[i]);
   }
   return vo;
 };
 
-#define ARGS_af_toTaggedFixnum "(arg)"
-#define DECL_af_toTaggedFixnum ""
-#define DOCS_af_toTaggedFixnum "toTaggedFixnum"
-T_sp af_toTaggedFixnum(int val) {
-  _G();
-  return gctools::smart_ptr<T_O>(val);
-};
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(toTaggedFixnum)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__to_tagged_fixnum(int val) { return gctools::smart_ptr<T_O>(val); };
 
-#define ARGS_af_fromTaggedFixnum "(val)"
-#define DECL_af_fromTaggedFixnum ""
-#define DOCS_af_fromTaggedFixnum "fromTaggedFixnum"
-gctools::Fixnum af_fromTaggedFixnum(T_sp val) {
-  _G();
+CL_LAMBDA(val);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(fromTaggedFixnum)dx");
+DOCGROUP(clasp);
+CL_DEFUN gctools::Fixnum core__from_tagged_fixnum(T_sp val) {
   if (val.fixnump()) {
     return val.unsafe_fixnum();
   }
-  SIMPLE_ERROR(BF("Not a fixnum"));
+  SIMPLE_ERROR("Not a fixnum");
 };
 
-#define ARGS_af_dumpTaggedFixnum "(arg)"
-#define DECL_af_dumpTaggedFixnum ""
-#define DOCS_af_dumpTaggedFixnum "dumpTaggedFixnum"
-void af_dumpTaggedFixnum(T_sp val) {
-  _G();
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(dumpTaggedFixnum)dx");
+DOCGROUP(clasp);
+CL_DEFUN void core__dump_tagged_fixnum(T_sp val) {
   if (val.fixnump()) {
-    printf("%s:%d Raw TaggedFixnum %p   Untagged %ld\n",
-           __FILE__, __LINE__, val.raw_(), val.unsafe_fixnum());
+    printf("%s:%d Raw TaggedFixnum %p   Untagged %" PFixnum "\n", __FILE__, __LINE__, val.raw_(), val.unsafe_fixnum());
   } else
     printf("%s:%d Not a tagged fixnum\n", __FILE__, __LINE__);
 }
 
-#define ARGS_af_getEnv "(arg)"
-#define DECL_af_getEnv ""
-#define DOCS_af_getEnv "getEnv"
-T_sp af_getEnv(Str_sp arg) {
-  _G();
-  char *sres = getenv(arg->c_str());
-  if (sres == NULL) {
-    return _Nil<T_O>();
-  }
-  return Str_O::create(sres);
-};
+CL_DOCSTRING(R"dx(Return the LLVM version as integer values, i.e. (VALUES major minor patch))dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv ext__llvm_version() {
+  return Values(clasp_make_fixnum(LLVM_VERSION_MAJOR), clasp_make_fixnum(LLVM_VERSION_MINOR),
+                clasp_make_fixnum(LLVM_VERSION_PATCH));
+}
 
-#define ARGS_core_describe_cxx_object "(name &optional stream)"
-#define DECL_core_describe_cxx_object ""
-#define DOCS_core_describe_cxx_object "Describe a C++ object as CL:DESCRIBE"
-void core_describe_cxx_object(T_sp obj, T_sp stream) {
+CL_LAMBDA(name &optional stream);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Describe a
+C++ object
+like CL:DESCRIBE)dx")
+DOCGROUP(clasp);
+CL_DEFUN void core__describe_cxx_object(T_sp obj, T_sp stream) {
   if (obj.generalp()) {
-    obj->describe(stream);
+    obj.unsafe_general()->describe(stream);
   } else if (obj.consp()) {
-    obj->describe(stream);
+    obj.unsafe_cons()->describe(stream);
   }
-  SIMPLE_ERROR(BF("Use the CL facilities to describe this object"));
+  SIMPLE_ERROR("Use the CL facilities to describe this object");
 };
 
-#define ARGS_core_setenv "(name arg overwrite)"
-#define DECL_core_setenv ""
-#define DOCS_core_setenv "getEnv"
-void core_setenv(Str_sp name, Str_sp arg, bool overwrite) {
-  setenv(name->c_str(), arg->c_str(), overwrite);
-};
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(isTrue)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool core__is_true(T_sp arg) { return arg.isTrue(); };
 
-#define ARGS_af_pointer "(arg)"
-#define DECL_af_pointer ""
-#define DOCS_af_pointer "Return the value of the pointer - used by conditions.lsp"
-int af_pointer(T_sp obj) {
-  _G();
-  return obj.intptr();
-};
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Return the UNBOUND value)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__unbound() { return unbound<T_O>(); };
 
-#define ARGS_af_isTrue "(arg)"
-#define DECL_af_isTrue ""
-#define DOCS_af_isTrue "isTrue"
-bool af_isTrue(T_sp arg) {
-  _G();
-  return arg.isTrue();
-};
-
-#define ARGS_af_substitute "(arg)"
-#define DECL_af_substitute ""
-#define DOCS_af_substitute "substitute"
-T_mv af_substitute() {
-  _G();
-  IMPLEMENT_MEF(BF("Implement substitute"));
-};
-
-#define ARGS_af_unbound "()"
-#define DECL_af_unbound ""
-#define DOCS_af_unbound "Return the UNBOUND value"
-T_sp af_unbound() {
-  _G();
-  return _Unbound<T_O>();
-};
-
-#define ARGS_af_smartPointerDetails "()"
-#define DECL_af_smartPointerDetails ""
-#define DOCS_af_smartPointerDetails "smartPointerDetails - returns (values ptr-type px-offset px-size). The ptr-type is the type of pointer used to pass objects - either MPS-GARBAGE-COLLECTION or INTRUSIVE-REFERENCE-COUNTED-POINTER. The px-offset is the number of bytes offset of the smart_ptr data pointer from the start of the smart_ptr and px-size is the size of the data pointer"
-T_mv af_smartPointerDetails() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(smartPointerDetails - returns (values ptr-type px-offset px-size))dx");
+CL_DOCSTRING_LONG(
+    R"dx(The ptr-type is the type of pointer used to pass objects - either MPS-GARBAGE-COLLECTION or INTRUSIVE-REFERENCE-COUNTED-POINTER. The px-offset is the number of bytes offset of the smart_ptr data pointer from the start of the smart_ptr and px-size is the size of the data pointer)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv core__smart_pointer_details() {
   SYMBOL_SC_(CorePkg, intrusiveReferenceCountedPointer);
   SYMBOL_SC_(CorePkg, sharedReferenceCountedPointer);
   SYMBOL_SC_(CorePkg, mpsGarbageCollection);
@@ -426,159 +514,225 @@ T_mv af_smartPointerDetails() {
   return Values(ptrType, pxOffset, pxSize);
 }
 
-#define ARGS_cl_values "(&rest args)"
-#define DECL_cl_values ""
-#define DOCS_cl_values "values"
-T_mv cl_values(List_sp args) {
-  _G();
+CL_LAMBDA(core:&va-rest args);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(values)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv cl__values(Vaslist_sp vargs) {
   // returns multiple values
-  T_mv result = ValuesFromCons(args);
-  return result;
+  size_t nargs = vargs->nargs();
+  SUPPRESS_GC();
+#ifdef DEBUG_VALUES
+  if (nargs >= core::MultipleValues::MultipleValuesLimit) {
+    SIMPLE_ERROR("Too many arguments to values - only {} are supported and you tried to return {} values",
+                 core::MultipleValues::MultipleValuesLimit, nargs);
+  }
+  if (_sym_STARdebug_valuesSTAR && _sym_STARdebug_valuesSTAR->boundP() && _sym_STARdebug_valuesSTAR->symbolValue().notnilp()) {
+    for (size_t di(0); di < nargs; ++di) {
+      T_sp dsp((gctools::Tagged)va_arg(debugl, T_O*));
+      printf("%s:%d   VALUES[%lu] -> %s\n", __FILE__, __LINE__, di, _rep_(dsp).c_str());
+    }
+    va_end(debugl);
+  }
+#endif
+  core::MultipleValues& me = (core::lisp_multipleValues());
+  me.setSize(0);
+  core::T_sp first(nil<core::T_O>());
+  if (nargs > 0) {
+    first = vargs->next_arg();
+    for (size_t i(1); i < nargs; ++i) {
+      T_O* tcsp = ENSURE_VALID_OBJECT(vargs->next_arg().raw_());
+      T_sp csp((gctools::Tagged)tcsp);
+      me.valueSet(i, csp);
+    }
+    me.setSize(nargs);
+  }
+  ENABLE_GC();
+  core::T_mv mv = gctools::multiple_values<core::T_O>(first, nargs);
+  return mv;
 }
 
-#define ARGS_core_valuesTesting "(&rest args)"
-#define DECL_core_valuesTesting ""
-#define DOCS_core_valuesTesting "values"
-T_mv core_valuesTesting(List_sp args) {
-  _G();
-  // returns multiple values
-  T_mv result = ValuesFromCons(args);
-  printf("%s:%d core_valuesTesting: %s\n", __FILE__, __LINE__, _rep_(args).c_str());
-  return result;
+CL_LAMBDA(list);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(values_list)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv cl__values_list(T_sp list) {
+  if (list.consp()) {
+    return ValuesFromCons(list);
+  } else if (list.nilp()) {
+    return Values0<T_O>();
+  } else if (gc::IsA<Vaslist_sp>(list)) {
+    Vaslist_sp vorig = gc::As_unsafe<Vaslist_sp>(list);
+    Vaslist valist_copy(*vorig);
+    Vaslist_sp valist(&valist_copy);
+    return cl__values(valist);
+  } else
+    // FIXME: Incorrect as vaslists are also allowed.
+    TYPE_ERROR(list, cl::_sym_list);
 }
 
-#define ARGS_af_values_list "(list)"
-#define DECL_af_values_list ""
-#define DOCS_af_values_list "values_list"
-T_mv af_values_list(List_sp list) {
-  _G();
-  return ValuesFromCons(list);
-}
-
-Symbol_sp functionBlockName(T_sp functionName) {
-  _G();
-  if (cl_symbolp(functionName))
+// Need to distinguish between nil as invalid-input and nil as the symbol found
+// correctp indicates correctness of input
+Symbol_sp functionBlockName(T_sp functionName, bool* correctp) {
+  *correctp = true;
+  if (cl__symbolp(functionName))
     return gc::As<Symbol_sp>(functionName);
-  if (cl_consp(functionName)) {
+  if (functionName.consp()) {
     List_sp cfn = functionName;
-    if (oCar(cfn) == cl::_sym_setf && cl_symbolp(oCadr(cfn)) & oCadr(cfn).notnilp()) {
+    if (oCar(cfn) == cl::_sym_setf && oCdr(cfn).consp() && cl__symbolp(oCadr(cfn)) && oCddr(cfn).nilp()) {
       return gc::As<Symbol_sp>(oCadr(cfn));
     }
   }
-  return _Nil<Symbol_O>();
+  *correctp = false;
+  return nil<Symbol_O>();
 }
 
-#define ARGS_af_functionBlockName "(functionName)"
-#define DECL_af_functionBlockName ""
-#define DOCS_af_functionBlockName "See CLHS glossary 'function block name'. If the functionName is a symbol return it.  If the functionName is a cons of the form (setf xxxx) return xxxx"
-Symbol_mv af_functionBlockName(T_sp functionName) {
-  _G();
-  Symbol_sp output = functionBlockName(functionName);
-  if (output.nilp()) {
-    SIMPLE_ERROR(BF("Invalid function name: %s") % _rep_(functionName));
+CL_LAMBDA(functionName);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Return the symbol part of the name)dx");
+CL_DOCSTRING_LONG(
+    R"dx(If the functionName is a symbol return it.  If the functionName is a cons of the form (setf xxxx) return xxxx)dx");
+DOCGROUP(clasp);
+CL_DEFUN Symbol_sp core__function_block_name(T_sp functionName) {
+  bool correct;
+  Symbol_sp output = functionBlockName(functionName, &correct);
+  if (!correct) {
+    SIMPLE_ERROR("Invalid function name: {}", _rep_(functionName));
   }
-  return (Values(output));
+  return output;
 }
 
-#define ARGS_af_validFunctionNameP "(arg)"
-#define DECL_af_validFunctionNameP ""
-#define DOCS_af_validFunctionNameP "validFunctionNameP"
-T_mv af_validFunctionNameP(T_sp arg) {
-  _G();
-  T_sp name = functionBlockName(arg);
-  if (name.nilp())
-    return (Values(_Nil<T_O>()));
-  return (Values(_lisp->_true()));
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(validFunctionNameP)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__valid_function_name_p(T_sp arg) {
+  bool correct;
+  [[maybe_unused]] Symbol_sp name = functionBlockName(arg, &correct);
+  if (!correct)
+    return nil<T_O>();
+  return _lisp->_true();
 };
 
-#define ARGS_af_makeStringOutputStream "(&key (elementType 'character))"
-#define DECL_af_makeStringOutputStream ""
-#define DOCS_af_makeStringOutputStream "makeStringOutputStream"
-T_mv af_makeStringOutputStream(T_sp elementType) {
-  _G();
-  if (elementType != cl::_sym_character) {
-    SIMPLE_ERROR(BF("Add support for non character string output streams - you asked for %s") % _rep_(elementType));
-  }
-  T_sp ss = clasp_make_string_output_stream();
-  return (Values(ss));
-};
-
-#define ARGS_af_testMemoryError "()"
-#define DECL_af_testMemoryError ""
-#define DOCS_af_testMemoryError "testMemoryError"
-void af_testMemoryError() {
-  _G();
-  int *h = (int *)malloc(sizeof(int));
-  *h = 1;
-  free(h);
-  *h = 2;
-};
-
-#define ARGS_af_separatePairList "(listOfPairs)"
-#define DECL_af_separatePairList ""
-#define DOCS_af_separatePairList "Split a list of pairs into a pair of lists returned as MultipleValues. The first list is each first element and the second list is each second element or nil if there was no second element"
-T_mv af_separatePairList(List_sp listOfPairs) {
-  _G();
-  ql::list firsts(_lisp);
-  ql::list seconds(_lisp);
+CL_LAMBDA(listOfPairs);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Split a list of pairs into a pair of lists returned as MultipleValues)dx");
+CL_DOCSTRING_LONG(
+    R"dx(The first list is each first element and the second list is each second element or nil if there was no second element)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv core__separate_pair_list(List_sp listOfPairs) {
+  ql::list firsts;
+  ql::list seconds;
   for (auto cur : listOfPairs) {
     T_sp element = oCar(cur);
-    if (cl_atom(element)) {
+    if (cl__atom(element)) {
       firsts << element;
-      seconds << _Nil<T_O>();
-    } else if (cl_consp(element)) {
+      seconds << nil<T_O>();
+    } else if (element.consp()) {
       List_sp pair = element;
-      size_t pairlen = cl_length(pair);
+      size_t pairlen = cl__length(pair);
       if (pairlen == 2 || pairlen == 1) {
         firsts << oCar(pair);
         seconds << oCadr(pair);
       } else {
-        SIMPLE_ERROR(BF("Expected one or two element list got: %s") % _rep_(pair));
+        SIMPLE_ERROR("Expected one or two element list got: {}", _rep_(pair));
       }
     } else {
-      SIMPLE_ERROR(BF("Expected single object or 2-element list - got: %s") % _rep_(element));
+      SIMPLE_ERROR("Expected single object or 2-element list - got: {}", _rep_(element));
     }
   }
   T_sp tfirsts = firsts.cons();
   return (Values(tfirsts, seconds.cons()));
 }
 
-#if DEPRECIATED_C_FUNCTION
-#define ARGS_af_c_function "(sym)"
-#define DECL_af_c_function ""
-#define DOCS_af_c_function "c_function"
-Pointer_mv af_c_function(Symbol_sp sym) {
-  _G();
-  return (Values(_lisp->lookup_c_function_ptr(sym)));
-};
-#endif
+// ignore env
+CL_LAMBDA(name &optional env);
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__get_global_inline_status(core::T_sp name, core::T_sp env) { return core__get_sysprop(name, cl::_sym_inline); }
 
-#define ARGS_cl_macroFunction "(symbol &optional env)"
-#define DECL_cl_macroFunction ""
-#define DOCS_cl_macroFunction "See CLHS: macroFunction"
-T_sp cl_macroFunction(Symbol_sp symbol, T_sp env) {
-  _G();
-  T_sp func = _Nil<T_O>();
-  if (env.nilp()) {
-    func = af_interpreter_lookup_macro(symbol, env);
-  } else if (Environment_sp eenv = env.asOrNull<Environment_O>()) {
-    func = af_interpreter_lookup_macro(symbol, eenv);
-  } else {
-    if (cleavirEnv::_sym_macroFunction->fboundp()) {
-      func = eval::funcall(cleavirEnv::_sym_macroFunction, symbol, env);
-    } else {
-      printf("%s:%d Unexpected environment for MACRO-FUNCTION before Cleavir is available - using toplevel environment\n", __FILE__, __LINE__);
-      func = af_interpreter_lookup_macro(symbol, _Nil<T_O>());
-    }
-  }
-  return func;
+CL_LAMBDA(name status &optional env);
+DOCGROUP(clasp);
+CL_DEFUN void core__setf_global_inline_status(core::T_sp name, bool status, core::T_sp env)
+{
+  core__put_sysprop(_lisp->_boolean(status),name,cl::_sym_inline);
 }
 
-#define ARGS_cl_specialOperatorP "(symbol)"
-#define DECL_cl_specialOperatorP ""
-#define DOCS_cl_specialOperatorP "See CLHS: special-operator-p"
-T_mv cl_specialOperatorP(T_sp sym) {
-  _G();
+// ignore env
+CL_LAMBDA(name &optional env);
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__function_type(T_sp name, T_sp env) { return core__get_sysprop(name, cl::_sym_ftype); }
+
+CL_LISPIFY_NAME("CORE:function-type");
+CL_LAMBDA(type name &optional env);
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp core__setf_function_type(T_sp type, T_sp name, T_sp env) {
+  core__put_sysprop(type, name, cl::_sym_ftype);
+  return type;
+}
+
+// Return whether this thing is shadowed in the function namespace.
+// It's shadowed if there's an flet or labels or macrolet for the name.
+// Used by get-setf-expansion and a few other places.
+// Note that this will return T even if there is no global definition to shadow.
+DOCGROUP(clasp);
+CL_DEFUN bool core__operator_shadowed_p(T_sp name, T_sp env) {
+  if (env.nilp()) {
+    // No lexical environment.
+    return false;
+  } else if (comp::Lexenv_sp bce = env.asOrNull<comp::Lexenv_O>()) {
+    return bce->functionInfo(name).notnilp();
+  } else { // Cleavir, maybe
+    SYMBOL_EXPORT_SC_(CorePkg, cleavir_operator_shadowed_p);
+    T_sp lbool = eval::funcall(core::_sym_cleavir_operator_shadowed_p, name, env);
+    return lbool.notnilp();
+  }
+}
+
+CL_LAMBDA(symbol &optional env);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(See CLHS: macro-function)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__macro_function(Symbol_sp symbol, T_sp env) {
+  if (env.nilp()) {
+    if (symbol->fboundp() && symbol->macroP())
+      return symbol->symbolFunction();
+    else
+      return nil<T_O>();
+  } else if (gc::IsA<comp::Lexenv_sp>(env)) {
+    return gc::As_unsafe<comp::Lexenv_sp>(env)->lookupMacro(symbol);
+  } else {
+    if (cleavirEnv::_sym_macroFunction->fboundp()) {
+      return eval::funcall(cleavirEnv::_sym_macroFunction, symbol, env);
+    } else {
+      printf("%s:%d Unexpected environment for MACRO-FUNCTION before Cleavir is available - using toplevel environment\n", __FILE__,
+             __LINE__);
+      if (symbol->fboundp() && symbol->macroP())
+        return symbol->symbolFunction();
+      else
+        return nil<T_O>();
+    }
+  }
+}
+
+CL_LISPIFY_NAME("cl:macro-function");
+CL_LAMBDA(function symbol &optional env);
+CL_DECLARE();
+CL_DOCSTRING(R"dx((setf macro-function))dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp setf_macro_function(Function_sp function, Symbol_sp symbol, T_sp env) {
+  Function_sp namedFunction;
+  (void)env; // ignore
+  symbol->setf_macroP(true);
+  symbol->setf_symbolFunction(function);
+  return function;
+}
+
+CL_LAMBDA(symbol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(See CLHS: special-operator-p)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__special_operator_p(Symbol_sp sym) {
+  // should signal type-error if its argument is not a symbol.
   SYMBOL_EXPORT_SC_(ClPkg, let);
   SYMBOL_EXPORT_SC_(ClPkg, letSTAR);
   SYMBOL_EXPORT_SC_(ClPkg, return_from);
@@ -599,676 +753,707 @@ T_mv cl_specialOperatorP(T_sp sym) {
   SYMBOL_EXPORT_SC_(ClPkg, unwind_protect);
   SYMBOL_EXPORT_SC_(ClPkg, labels);
   SYMBOL_EXPORT_SC_(ClPkg, progv);
-  if ((sym == cl::_sym_block) ||
-      (sym == cl::_sym_let) ||
-      (sym == cl::_sym_letSTAR) ||
-      (sym == cl::_sym_return_from) ||
-      (sym == cl::_sym_load_time_value) ||
-      (sym == cl::_sym_setq) ||
-      (sym == cl::_sym_eval_when) ||
-      (sym == cl::_sym_locally) ||
-      (sym == cl::_sym_symbol_macrolet) ||
-      (sym == cl::_sym_flet) ||
-      (sym == cl::_sym_macrolet) ||
-      (sym == cl::_sym_tagbody) ||
-      (sym == cl::_sym_function) ||
-      (sym == cl::_sym_multiple_value_call) ||
-      (sym == cl::_sym_the) ||
-      (sym == cl::_sym_go) ||
-      (sym == cl::_sym_multiple_value_prog1) ||
-      (sym == cl::_sym_if) ||
-      (sym == cl::_sym_progn) ||
-      (sym == cl::_sym_labels) ||
-      (sym == cl::_sym_unwind_protect) ||
-      (sym == cl::_sym_catch) ||
-      (sym == cl::_sym_throw) ||
-      (sym == cl::_sym_progv) ||
+  if ((sym == cl::_sym_block) || (sym == cl::_sym_progn) || (sym == cl::_sym_let) || (sym == cl::_sym_letSTAR) ||
+      (sym == cl::_sym_return_from) || (sym == cl::_sym_load_time_value) || (sym == cl::_sym_setq) || (sym == cl::_sym_eval_when) ||
+      (sym == cl::_sym_locally) || (sym == cl::_sym_symbol_macrolet) || (sym == cl::_sym_flet) || (sym == cl::_sym_macrolet) ||
+      (sym == cl::_sym_tagbody) || (sym == cl::_sym_function) || (sym == cl::_sym_multiple_value_call) || (sym == cl::_sym_the) ||
+      (sym == cl::_sym_go) || (sym == cl::_sym_multiple_value_prog1) || (sym == cl::_sym_if) || (sym == cl::_sym_labels) ||
+      (sym == cl::_sym_unwind_protect) || (sym == cl::_sym_catch) || (sym == cl::_sym_throw) || (sym == cl::_sym_progv) ||
       (sym == cl::_sym_quote)) {
-    return (Values(_lisp->_true()));
-  }
-  return (Values(_Nil<T_O>()));
-};
-
-#if 0
-#define ARGS_core_treatAsSpecialOperatorP "(symbol)"
-#define DECL_core_treatAsSpecialOperatorP ""
-#define DOCS_core_treatAsSpecialOperatorP "See CLHS: special-operator-p"
-T_sp core_treatAsSpecialOperatorP(T_sp sym) {
-  _G();
-  SYMBOL_EXPORT_SC_(CorePkg, debug_message);
-  if (sym == cl::_sym_unwind_protect)
-    return _Nil<T_O>(); // All handled in macros
-  if (sym == core::_sym_debug_message)
     return _lisp->_true();
-  return cl_specialOperatorP(sym);
+  } else
+    return nil<T_O>();
 };
-#endif
 
-#define ARGS_cl_ash "(integer count)"
-#define DECL_cl_ash ""
-#define DOCS_cl_ash "CLHS: ash"
-Integer_sp cl_ash(Integer_sp integer, Integer_sp count) {
-  int cnt = clasp_to_int(count);
-  return clasp_shift(integer, cnt);
+CL_DEFUN Integer_sp core__ash_left(Integer_sp integer, Integer_sp count) {
+  if (count.fixnump())
+    return clasp_shift_left(integer, count.unsafe_fixnum());
+  else if (clasp_zerop(integer))
+    return integer;
+  else
+    SIMPLE_ERROR("ash for bignum count not implemented");
 }
 
-#define ARGS_af_break "(&optional fmt-control &rest args)"
-#define DECL_af_break ""
-#define DOCS_af_break "Built in implementation of break - that calls the internal debugger - replace this with a CL implemented version"
-void af_break(T_sp fmt, List_sp args) {
-  _G();
+CL_DEFUN Integer_sp core__ash_right(Integer_sp integer, Integer_sp count) {
+  if (count.fixnump())
+    return clasp_shift_right(integer, count.unsafe_fixnum());
+  // bignum zero is impossible, so: all digits gone.
+  else if (clasp_minusp(integer))
+    return clasp_make_fixnum(-1);
+  else
+    return clasp_make_fixnum(0);
+}
+
+CL_DECLARE();
+CL_DOCSTRING(R"dx(CLHS: ash)dx");
+DOCGROUP(clasp);
+CL_DEFUN Integer_sp cl__ash(Integer_sp integer, Integer_sp count) {
+  if (count.fixnump()) {
+    Fixnum c = count.unsafe_fixnum();
+    if (c > 0)
+      return clasp_shift_left(integer, c);
+    else if (c < 0)
+      return clasp_shift_right(integer, -c);
+    else
+      return integer;
+  } else {
+    // count is bignum
+    // We don't have integers with more than most-positive-fixnum digits,
+    // so this operation is now pretty trivial.
+    if (clasp_plusp(count)) {
+      if (clasp_zerop(integer))
+        return integer;
+      // result will not fit in memory, giveup (FIXME: storage-condition?)
+      else
+        SIMPLE_ERROR("ash for bignum count not implemented");
+    } else if (clasp_minusp(count)) {
+      // Count is a negative bignum, so all digits are gone.
+      if (clasp_minusp(integer))
+        return clasp_make_fixnum(-1);
+      else
+        return clasp_make_fixnum(0);
+    } else
+      return integer; // zero bignum, should be impossible
+  }
+}
+
+CL_LAMBDA(&optional fmt-control &rest args);
+CL_DECLARE();
+CL_DOCSTRING(
+    R"dx(Built in implementation of break - that calls the internal debugger - replace this with a CL implemented version)dx");
+DOCGROUP(clasp);
+CL_DEFUN void core__break_low_level(T_sp fmt, List_sp args) {
   if (fmt.notnilp()) {
-    af_format(_lisp->_true(), gc::As<Str_sp>(fmt), args);
+    cl__format(_lisp->_true(), gc::As<String_sp>(fmt), args);
   }
   dbg_hook("built in break");
-  af_invokeInternalDebugger(_Nil<core::T_O>());
+  core__invoke_internal_debugger(nil<core::T_O>());
 };
 
-#define ARGS_af_gdb "(&optional msg)"
-#define DECL_af_gdb ""
-#define DOCS_af_gdb "hook to invoke gdb"
-void af_gdb(T_sp msg) {
-  _G();
+CL_LAMBDA(&optional msg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(hook to invoke gdb)dx");
+DOCGROUP(clasp);
+NEVER_OPTIMIZE CL_DEFUN void core__gdb(T_sp msg) {
   T_sp obj = msg;
   string smsg = "No msg";
   if (obj.notnilp()) {
     smsg = _rep_(obj);
   }
   dbg_hook(smsg.c_str());
-  af_invokeInternalDebugger(_Nil<core::T_O>());
+  //  core__invoke_internal_debugger(nil<core::T_O>());
 };
 
-#define ARGS_core_cxx_lambda_list_handler_create_bindings_calls "()"
-#define DECL_core_cxx_lambda_list_handler_create_bindings_calls ""
-#define DOCS_core_cxx_lambda_list_handler_create_bindings_calls "Return the number of times lambdaListHandler_createBindings"
-Integer_sp core_cxx_lambda_list_handler_create_bindings_calls() {
-  size_t calls = threadLocalInfoPtr->_lambda_list_handler_create_bindings_count;
-  return Integer_O::create((Fixnum)calls);
-};
-
-#define ARGS_core_trapExecution "(&optional msg)"
-#define DECL_core_trapExecution ""
-#define DOCS_core_trapExecution "hook to invoke gdb"
-void core_trapExecution(T_sp msg) {
-  _G();
+CL_LAMBDA(&optional msg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(hook to invoke gdb)dx");
+DOCGROUP(clasp);
+CL_DEFUN void core__trap_execution(T_sp msg) {
   T_sp obj = msg;
   string smsg = "No msg";
   if (obj.notnilp()) {
     smsg = _rep_(obj);
   }
-  printf("%s:%d In core_trapExecution: %s \n", __FILE__, __LINE__, smsg.c_str());
+  printf("%s:%d In core__trap_execution: %s \n", __FILE__, __LINE__, smsg.c_str());
   fflush(stdout);
 };
 
-#define ARGS_af_gdbInspect "(msg o)"
-#define DECL_af_gdbInspect ""
-#define DOCS_af_gdbInspect "hook to invoke gdb"
-void af_gdbInspect(Str_sp msg, T_sp o) {
-  _G();
+CL_LAMBDA(msg o);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(hook to invoke gdb)dx");
+DOCGROUP(clasp);
+CL_DEFUN void core__gdb_inspect(String_sp msg, T_sp o) {
+  ASSERT(cl__stringp(msg));
   printf("gdbInspect object: %s\n", _rep_(o).c_str());
-  dbg_hook(msg->get().c_str());
-  af_invokeInternalDebugger(_Nil<core::T_O>());
+  dbg_hook(msg->get_std_string().c_str());
+  core__invoke_internal_debugger(nil<core::T_O>());
 };
 
-#define ARGS_af_constantp "(obj &optional env)"
-#define DECL_af_constantp ""
-#define DOCS_af_constantp "constantp"
-bool af_constantp(T_sp obj, T_sp env) {
-  _G();
+CL_LISPIFY_NAME("EXT:specialp");
+CL_LAMBDA(specialp symbol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Set whether SYMBOL is globally known to be special. Use cautiously.)dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF bool setf_symbol_specialp(bool specialp, Symbol_sp symbol) {
+  symbol->setf_specialP(specialp);
+  return specialp;
+}
+
+CL_LAMBDA(symbol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Returns whether SYMBOL is known to be a constant (i.e. from DEFCONSTANT).)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool core__symbol_constantp(Symbol_sp symbol) { return symbol->getReadOnly(); }
+
+CL_LISPIFY_NAME("CORE:symbol-constantp");
+CL_LAMBDA(value symbol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Set whether SYMBOL is known to be a constant. Use cautiously.)dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp setf_symbol_constantp(T_sp value, Symbol_sp symbol) {
+  symbol->setReadOnly(value.notnilp());
+  return value;
+}
+
+// Must be synced with constant-form-value in source-transformations.lisp
+CL_LAMBDA(obj &optional env);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(constantp)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool cl__constantp(T_sp obj, T_sp env) {
   // ignore env
-  if (cl_numberp(obj))
-    return true;
-  if (af_characterP(obj))
-    return true;
-  if (af_arrayP(obj))
-    return true;
-  // TODO add various kinds of array
-  if (cl_consp(obj) && oCar(obj) == cl::_sym_quote)
-    return true;
-  if (obj.nilp())
-    return true;
-  if (cl_symbolp(obj)) {
-    if (af_keywordP(obj))
+  if (cl__symbolp(obj)) {
+    if (cl__keywordp(obj))
       return true;
-    return gc::As<Symbol_sp>(obj)->isConstant();
+    return gc::As<Symbol_sp>(obj)->getReadOnly();
   }
-  return false;
-};
-
-#define ARGS_af_identity "(arg)"
-#define DECL_af_identity ""
-#define DOCS_af_identity "identity"
-T_mv af_identity(T_sp arg) {
-  _G();
-  return (Values(arg));
-};
-
-#define DOCS_af_macroexpand_default "macroexpand_default Default value of *macroexpand-hook*"
-#define LOCK_af_macroexpand_default 1
-#define ARGS_af_macroexpand_default "(macro_function form macro_env)"
-#define DECL_af_macroexpand_default ""
-T_mv af_macroexpand_default(Function_sp macro_function, T_sp form, T_sp macro_env) {
-  _G();
-  Function_sp debugMacroFunction = macro_function;
-  T_sp debugForm = form;
-  T_sp debugEnvironment = macro_env;
-  T_sp tllh = macro_function->functionLambdaListHandler();
-  if (LambdaListHandler_sp llh = tllh.asOrNull<LambdaListHandler_O>()) {
-    if (llh->numberOfRequiredArguments() != 2) {
-      stringstream err;
-      err << __FILE__ << ":" << __LINE__ << " Caught a problem in af_macroexpand_default - the macro_function requires " << llh->numberOfRequiredArguments() << " arguments but I'm only going to pass 2!!!" << std::endl;
-      err << "lambda_list: " << _rep_(llh) << std::endl;
-      err << "Passing argument 1: " << _rep_(form) << std::endl;
-      err << "Passing argument 2: " << _rep_(macro_env) << std::endl;
-      gctools::tagged_pointer<Closure> closure = macro_function->closure;
-      err << "macro_function[" << _rep_(macro_function->functionName()) << std::endl;
-      if (auto ic = closure.as<InterpretedClosure>()) {
-        err << "code: " << _rep_(ic->code());
-      } else {
-        err << "macro_function is not an interpreted function";
-      }
-      SIMPLE_ERROR(BF("Wrong number of arguments %d within macroexpand_default when trying to invoke macro %s\nMore detail: %s") % llh->numberOfRequiredArguments() % _rep_(macro_function->functionName()) % err.str());
-    }
+  if (obj.consp()) {
+    if (oCar(obj) == cl::_sym_quote)
+      // more analysis could be done here.
+      return true;
+    else
+      return false;
   }
-  T_sp result = eval::funcall(macro_function, form, macro_env);
-  return (Values(result));
+  return true;
 };
 
-#define ARGS_af_null "(obj)"
-#define DECL_af_null ""
-#define DOCS_af_null "null test - return true if the object is the empty list otherwise return nil"
-#define LOCK_af_null 1
-T_mv af_null(T_sp obj) {
-  _G();
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(identity)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__identity(T_sp arg) { return arg; };
+
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(null test - return true if the object is the empty list otherwise return nil)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__null(T_sp obj) {
   if (obj.nilp())
-    return (Values(_lisp->_true()));
-  return (Values(_Nil<T_O>()));
+    return _lisp->_true();
+  return nil<T_O>();
 };
 
-#define LOCK_af_classOf 1
-#define DOCS_af_classOf "return class of object - see CLHS"
-#define ARGS_af_classOf "(obj)"
-#define DECL_af_classOf ""
-Class_sp af_classOf(T_sp obj) {
-  _G();
-  Class_sp result = lisp_instance_class(obj);
-#if DEBUG_CLOS >= 3
-  printf("\nMLOG classOf %s ---> %s\n", obj->__repr__().c_str(), result->__repr__().c_str());
-#endif
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(return class of object - see CLHS)dx");
+DOCGROUP(clasp);
+CL_DEFUN Instance_sp cl__class_of(T_sp obj) {
+  Instance_sp result = lisp_instance_class(obj);
   return (result);
 }
 
-#define LOCK_af_STARfset 1
-#define DOCS_af_STARfset "fset - bind a function to its name - handles symbol function-name and (SETF XXXX) names. (macro) defines if the function is a macro or not."
-#define ARGS_af_STARfset "(function-name fn &optional macro)"
-#define DECL_af_STARfset ""
-T_sp af_STARfset(T_sp functionName, Function_sp functionObject, T_sp macro) {
-  ASSERTF(functionObject, BF("function is undefined\n"));
-  if (macro.isTrue()) {
-    functionObject->setKind(kw::_sym_macro);
-  } else {
-    functionObject->setKind(kw::_sym_function);
+SYMBOL_EXPORT_SC_(CorePkg, STARdebug_fsetSTAR);
+CL_LAMBDA(function-name fn &optional is-macro (lambda-list nil lambda-list-p));
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Primitive to setup a function/macro)dx");
+CL_DOCSTRING_LONG(R"dx(* Arguments
+- function-name :: The name of the function to bind.
+- fn :: The function object.
+- is-macro :: A boolean.
+- lambda-list : A lambda-list or nil.
+- lambda-list-p : T if lambda-list is passed
+* Description
+Bind a function to the function slot of a symbol
+- handles symbol function-name and (SETF XXXX) names.
+IS-MACRO defines if the function is a macro or not.
+LAMBDA-LIST passes the lambda-list.)dx")
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__fset(T_sp functionName, Function_sp functor, T_sp is_macro, T_sp lambda_list, T_sp lambda_list_p) {
+  if (Function_sp functionObject = functor.asOrNull<Function_O>()) {
+    if (lambda_list_p.notnilp()) {
+      functionObject->setf_lambdaList(lambda_list);
+    }
   }
-  if (comp::_sym_STARall_functions_for_one_compileSTAR->boundP()) {
-    functionObject->closure->setAssociatedFunctions(comp::_sym_STARall_functions_for_one_compileSTAR->symbolValue());
-  }
-  if (cl_symbolp(functionName)) {
+  if (cl__symbolp(functionName)) {
     Symbol_sp symbol = gc::As<Symbol_sp>(functionName);
-    symbol->setf_symbolFunction(functionObject);
-    return functionObject;
-  } else if (cl_consp(functionName)) {
+    symbol->setf_macroP(is_macro.isTrue());
+    symbol->setf_symbolFunction(functor);
+    return functor;
+  } else if (functionName.consp()) {
     SYMBOL_EXPORT_SC_(ClPkg, setf);
     List_sp cur = functionName;
     if (oCar(cur) == cl::_sym_setf) {
       Symbol_sp symbol = gc::As<Symbol_sp>(oCadr(cur));
-      symbol->setSetfFdefinition(functionObject);
-      return functionObject;
+      symbol->setSetfFdefinition(functor);
+      return functor;
     }
   }
-  SIMPLE_ERROR(BF("Illegal name for function[%s]") % _rep_(functionName));
+  TYPE_ERROR(functionName, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
 };
 
-#define ARGS_af_fdefinition "(function-name)"
-#define DECL_af_fdefinition ""
-#define DOCS_af_fdefinition "fdefinition"
-T_sp af_fdefinition(T_sp functionName) {
-  if (cl_symbolp(functionName)) {
-    Symbol_sp sym = gc::As<Symbol_sp>(functionName);
-    return sym->symbolFunction();
-  } else if (cl_consp(functionName)) {
+CL_LAMBDA(function-name);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(fdefinition)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__fdefinition(T_sp functionName) {
+  if (functionName.consp()) {
     List_sp cname = functionName;
     if (oCar(cname) == cl::_sym_setf) {
-      Symbol_sp name = gc::As<Symbol_sp>(oCadr(cname));
-      if (name.notnilp()) {
-        return name->getSetfFdefinition();
+      // take care of (setf . bar) or (setf bar foo) or (setf bar .foo)
+      // so don't go directly for the cadr
+      T_sp dname = oCdr(cname);
+      if (dname.consp()) {
+        Symbol_sp name = gc::As<Symbol_sp>(oCar(dname));
+        if (name.notnilp() && oCdr(dname).nilp()) {
+          return name->getSetfFdefinition();
+        }
+      }
+    }
+  } else if (Symbol_sp sym = functionName.asOrNull<Symbol_O>()) {
+    return sym->symbolFunction();
+  }
+  TYPE_ERROR(functionName, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
+}
+
+CL_LISPIFY_NAME("cl:fdefinition");
+CL_LAMBDA(function name);
+CL_DECLARE();
+CL_DOCSTRING(R"dx((setf fdefinition))dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp setf_fdefinition(Function_sp function, T_sp name) {
+  Symbol_sp symbol;
+  Function_sp functionObject;
+  if ((symbol = name.asOrNull<Symbol_O>())) {
+    symbol->setf_macroP(false);
+    symbol->setf_symbolFunction(function);
+    return function;
+  } else if (name.consp()) {
+    List_sp cur = name;
+    if (oCar(cur) == cl::_sym_setf) {
+      T_sp cur2 = oCdr(cur);
+      if (cur2.consp()) {
+        symbol = gc::As<Symbol_sp>(oCar(cur2));
+        if (symbol.notnilp() && oCdr(cur2).nilp()) {
+          symbol->setSetfFdefinition(function);
+          return function;
+        }
       }
     }
   }
-  SIMPLE_ERROR(BF("Illegal function-name[%s]") % _rep_(functionName));
+  TYPE_ERROR(name, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
 }
 
-#define ARGS_af_fboundp "(function-name)"
-#define DECL_af_fboundp ""
-#define DOCS_af_fboundp "fboundp"
-bool af_fboundp(T_sp functionName) {
-  _G();
-  if (functionName.nilp()) {
+// Used by the FASL loaders.
+DOCGROUP(clasp);
+CL_DEFUN FunctionCell_sp core__ensure_function_cell(T_sp function_name) {
+  if (function_name.consp()) {
+    List_sp cname = function_name;
+    if (oCar(cname) == cl::_sym_setf) {
+      T_sp dname = oCdr(cname);
+      if (dname.consp()) {
+        Symbol_sp name = gc::As<Symbol_sp>(oCar(dname));
+        if (name.notnilp() && oCdr(dname).nilp()) {
+          return name->ensureSetfFunctionCell();
+        }
+      }
+    }
+  } else if (gc::IsA<Symbol_sp>(function_name)) {
+    return gc::As_unsafe<Symbol_sp>(function_name)->ensureFunctionCell();
+  }
+  TYPE_ERROR(function_name, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
+}
+
+// Used in xref.
+CL_DOCSTRING(R"(Return the function cell for FUNCTION-NAME if it exists already, or else NIL.)")
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__function_cell(T_sp function_name) {
+  T_sp result = unbound<T_O>();
+  if (function_name.consp()) {
+    List_sp cname = function_name;
+    if (oCar(cname) == cl::_sym_setf) {
+      T_sp dname = oCdr(cname);
+      if (dname.consp()) {
+        Symbol_sp name = gc::As<Symbol_sp>(oCar(dname));
+        if (name.notnilp() && oCdr(dname).nilp()) {
+          result = name->setfFunctionCell();
+        }
+      }
+    }
+  } else if (gc::IsA<Symbol_sp>(function_name)) {
+    result = gc::As_unsafe<Symbol_sp>(function_name)->functionCell();
+  }
+  // Don't signal an error here - this function should be harmless
+  // since it's used for debugging type stuff.
+  if (result.unboundp())
+    return nil<T_O>();
+  else
+    return result;
+}
+
+// reader in symbol.cc; this additionally involves function properties, so it's here
+CL_LISPIFY_NAME("cl:symbol-function");
+CL_LAMBDA(function symbol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx((setf symbol-function))dx");
+DOCGROUP(clasp);
+CL_DEFUN_SETF T_sp setf_symbol_function(Function_sp function, Symbol_sp name) {
+  Function_sp functionObject;
+  name->setf_macroP(false);
+  name->setf_symbolFunction(function);
+  return function;
+}
+
+CL_LAMBDA(function-name);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(fboundp)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool cl__fboundp(T_sp functionName) {
+  if (functionName.consp()) {
+    List_sp cname = functionName;
+    if (oCar(cname) == cl::_sym_setf) {
+      T_sp dname = oCdr(cname);
+      if (dname.consp()) {
+        Symbol_sp name = gc::As<Symbol_sp>(oCar(dname));
+        // (setf function <whatever>) is also a type error
+        // (setf nil) is ok (setf) and (setf nil nil) not
+        if (oCdr(dname).nilp())
+          return name->fboundp_setf();
+        // else is a type_error, so continue execution
+      }
+    }
+  } else if (Symbol_sp sym = functionName.asOrNull<Symbol_O>()) {
+    return sym->fboundp();
+  } else if (functionName.nilp()) {
     return false;
   }
-  if (cl_symbolp(functionName)) {
-    Symbol_sp sym = gc::As<Symbol_sp>(functionName);
-    return sym->fboundp();
-  } else if (cl_consp(functionName)) {
-    List_sp cname = functionName;
-    if (oCar(cname) == cl::_sym_setf) {
-      Symbol_sp name = gc::As<Symbol_sp>(oCadr(cname));
-      if (name.notnilp())
-        return name->setf_fboundp();
-    }
-  }
-  SIMPLE_ERROR(BF("Illegal function-name[%s]") % _rep_(functionName));
+  TYPE_ERROR(functionName, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
 }
 
-#define ARGS_af_fmakunbound "(function-name)"
-#define DECL_af_fmakunbound ""
-#define DOCS_af_fmakunbound "fmakunbound"
-T_mv af_fmakunbound(T_sp functionName) {
-  _G();
-  if (cl_symbolp(functionName)) {
-    Symbol_sp sym = gc::As<Symbol_sp>(functionName);
-    sym->setf_symbolFunction(_Unbound<Function_O>());
-    return (Values(sym));
-  } else if (cl_consp(functionName)) {
+CL_LAMBDA(function-name);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(fmakunbound)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__fmakunbound(T_sp functionName) {
+  if (functionName.consp()) {
     List_sp cname = functionName;
     if (oCar(cname) == cl::_sym_setf) {
-      Symbol_sp name = gc::As<Symbol_sp>(oCadr(cname));
-      if (name.notnilp()) {
-        name->resetSetfFdefinition(); //_lisp->remove_setfDefinition(name);
-        return (Values(functionName));
+      T_sp dname = oCdr(cname);
+      if (dname.consp()) {
+        Symbol_sp name = gc::As<Symbol_sp>(oCar(dname));
+        if (name.notnilp() && oCdr(dname).nilp()) {
+          name->fmakunbound_setf();
+          return functionName;
+        }
       }
     }
+  } else if (Symbol_sp sym = functionName.asOrNull<Symbol_O>()) {
+    sym->fmakunbound();
+    return sym;
   }
-  SIMPLE_ERROR(BF("Illegal function-name[%s]") % _rep_(functionName));
+  TYPE_ERROR(functionName, Cons_O::createList(cl::_sym_satisfies, core::_sym_validFunctionNameP));
 }
 
-#define LOCK_af_read_delimited_list 1
-#define DOCS_af_read_delimited_list "read a list up to a specific character - see CLHS"
-#define ARGS_af_read_delimited_list "(char &optional input-stream-designator recursive-p)"
-#define DECL_af_read_delimited_list ""
-T_mv af_read_delimited_list(Character_sp chr, T_sp input_stream_designator, T_sp recursive_p) {
-  _G();
+CL_LAMBDA(char &optional input-stream-designator recursive-p);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(read a list up to a specific character - see CLHS)dx");
+DOCGROUP(clasp);
+CL_DEFUN List_sp cl__read_delimited_list(Character_sp chr, T_sp input_stream_designator, T_sp recursive_p) {
   T_sp sin = coerce::inputStreamDesignator(input_stream_designator);
 #if 0
 	// I think it is safe to ignore recursive_p
-	if ( recursive_p.isTrue() )
-	{
-	    SIMPLE_ERROR(BF("Currently I don't handle recursive-p[true] for read_delimited_list"));
-	}
-#endif
-  T_sp result = read_list(sin, clasp_as_char(chr), true);
-  if (cl::_sym_STARread_suppressSTAR->symbolValue().isTrue()) {
-    return (Values(_Nil<T_O>()));
+  if ( recursive_p.isTrue() )
+  {
+    SIMPLE_ERROR("Currently I don't handle recursive-p[true] for read_delimited_list");
   }
-  return (Values(result));
+#endif
+  List_sp result = read_list(sin, clasp_as_claspCharacter(chr), true);
+  if (cl::_sym_STARread_suppressSTAR->symbolValue().isTrue()) {
+    return nil<T_O>();
+  }
+  return result;
 }
 
-#define LOCK_cl_read 1
-#define DOCS_cl_read "read an object from a stream - see CLHS"
-#define ARGS_cl_read "(&optional input-stream-designator (eof-error-p t) eof-value recursive-p)"
-#define DECL_cl_read ""
-T_sp cl_read(T_sp input_stream_designator, T_sp eof_error_p, T_sp eof_value, T_sp recursive_p) {
-  _G();
+SYMBOL_EXPORT_SC_(CorePkg, STARread_hookSTAR);
+
+CL_LAMBDA(&optional input-stream-designator (eof-error-p t) eof-value recursive-p);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(read an object from a stream - see CLHS)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__read(T_sp input_stream_designator, T_sp eof_error_p, T_sp eof_value, T_sp recursive_p) {
+  bool preserve_whitespace = true;
+  if (recursive_p.isTrue()) {
+    preserve_whitespace = _sym_STARpreserve_whitespace_pSTAR->symbolValue().isTrue();
+  } else {
+    preserve_whitespace = false;
+  }
+  DynamicScopeManager scope(_sym_STARpreserve_whitespace_pSTAR, _lisp->_boolean(preserve_whitespace));
   T_sp sin = coerce::inputStreamDesignator(input_stream_designator);
-  return (read_lisp_object(sin, eof_error_p.isTrue(), eof_value, recursive_p.notnilp()));
+  if (_sym_STARread_hookSTAR->boundP() && _sym_STARread_hookSTAR->symbolValue().notnilp())
+    return eval::funcall(_sym_STARread_hookSTAR->symbolValue(), sin, eof_error_p, eof_value, recursive_p);
+  else
+    return read_lisp_object(sin, eof_error_p.isTrue(), eof_value, recursive_p.notnilp());
 }
 
-#define DOCS_cl_read_preserving_whitespace "read an object from a stream while preserving whitespace - see CLHS"
-#define ARGS_cl_read_preserving_whitespace "(&optional input-stream-designator (eof-error-p t) eof-value recursive-p)"
-#define DECL_cl_read_preserving_whitespace ""
-T_sp cl_read_preserving_whitespace(T_sp input_stream_designator, T_sp eof_error_p, T_sp eof_value, T_sp recursive_p) {
-  _G();
-  DynamicScopeManager scope(_sym_STARpreserve_whitespace_pSTAR, _lisp->_true());
+CL_LAMBDA(&optional input-stream-designator (eof-error-p t) eof-value recursive-p);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(read an object from a stream - see CLHS)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__fast_read(T_sp input_stream_designator, T_sp eof_error_p, T_sp eof_value, T_sp recursive_p) {
+  bool preserve_whitespace = true;
+  if (recursive_p.isTrue()) {
+    preserve_whitespace = _sym_STARpreserve_whitespace_pSTAR->symbolValue().isTrue();
+  } else {
+    preserve_whitespace = false;
+  }
+  DynamicScopeManager scope(_sym_STARpreserve_whitespace_pSTAR, _lisp->_boolean(preserve_whitespace));
   T_sp sin = coerce::inputStreamDesignator(input_stream_designator);
-  return (read_lisp_object(sin, eof_error_p.isTrue(), eof_value, recursive_p.isTrue()));
+  return read_lisp_object(sin, eof_error_p.isTrue(), eof_value, recursive_p.notnilp());
+}
+
+SYMBOL_EXPORT_SC_(CorePkg, STARread_preserving_whitespace_hookSTAR);
+CL_LAMBDA(&optional input-stream-designator (eof-error-p t) eof-value recursive-p);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(read an object from a stream while preserving whitespace - see CLHS)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__read_preserving_whitespace(T_sp input_stream_designator, T_sp eof_error_p, T_sp eof_value, T_sp recursive_p) {
+  bool preserve_whitespace = true;
+  if (recursive_p.isTrue()) {
+    preserve_whitespace = _sym_STARpreserve_whitespace_pSTAR->symbolValue().isTrue();
+  } else {
+    preserve_whitespace = true;
+  }
+  DynamicScopeManager scope(_sym_STARpreserve_whitespace_pSTAR, _lisp->_boolean(preserve_whitespace));
+  T_sp sin = coerce::inputStreamDesignator(input_stream_designator);
+  if (_sym_STARread_preserving_whitespace_hookSTAR->boundP() &&
+      _sym_STARread_preserving_whitespace_hookSTAR->symbolValue().notnilp())
+    return eval::funcall(_sym_STARread_preserving_whitespace_hookSTAR->symbolValue(), sin, eof_error_p, eof_value, recursive_p);
+  else
+    return read_lisp_object(sin, eof_error_p.isTrue(), eof_value, recursive_p.isTrue());
 }
 
 /* -------------------------------------------------------- */
 /*     Sequence primitives                                  */
 
-#if 0
-    GC_RESULT VectorStepper::onHeapScanGCRoots(GC_SCAN_ARGS_PROTOTYPE)
-    {
-#ifdef USE_MPS
-        MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-            SMART_PTR_FIX(this->_Domain);
-        } MPS_SCAN_END(GC_SCAN_STATE);
-#endif
-        return GC_RES_OK;
-    }
-#endif
-
-#if 0
-    GC_RESULT ConsStepper::onHeapScanGCRoots(GC_SCAN_ARGS_PROTOTYPE)
-    {
-#ifdef USE_MPS
-        MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-            SMART_PTR_FIX(this->_Cur);
-        } MPS_SCAN_END(GC_SCAN_STATE);
-#endif
-        return GC_RES_OK;
-    }
-#endif
-
-ListOfSequenceSteppers::ListOfSequenceSteppers(List_sp sequences) {
-  _G();
-  this->_AtEnd = false;
-  for (auto cur : sequences) {
-    T_sp obj = oCar(cur);
-    if (Vector_sp vobj = obj.asOrNull<Vector_O>()) {
-      if (cl_length(vobj) == 0)
-        goto EMPTY;
-      gctools::tagged_pointer<VectorStepper> vP(gctools::ClassAllocator<VectorStepper>::allocateClass(vobj));
-      this->_Steppers.push_back(vP);
-    } else if (Cons_sp cobj = obj.asOrNull<Cons_O>()) {
-      gctools::tagged_pointer<ConsStepper> cP(gctools::ClassAllocator<ConsStepper>::allocateClass(cobj));
-      this->_Steppers.push_back(cP);
-    } else if (obj.nilp()) {
-      goto EMPTY;
-    } else {
-      SIMPLE_ERROR(BF("Illegal object for stepper[%s] class[%s]") % _rep_(obj) % obj->_instanceClass()->classNameAsString());
+/* Only works on lists of lists - used to support macroexpansion backquote */
+bool test_every_some_notevery_notany(Function_sp predicate, List_sp sequences, bool elementTest, bool elementReturn,
+                                     bool fallThroughReturn, T_sp& retVal) {
+  if (!sequences.consp())
+    goto FALLTHROUGH;
+  {
+    size_t nargs = sequences.unsafe_cons()->proper_list_length();
+    MAKE_STACK_FRAME(frame, nargs);
+    bool atend = false;
+    while (!atend) {
+      atend = false;
+      size_t idx = 0;
+      for (auto cur : sequences) {
+        List_sp top = CONS_CAR(cur);
+        gctools::fill_frame_one(frame, idx, oCar(top).raw_());
+        if (top.consp()) {
+          cur->rplaca(CONS_CDR(top));
+        } else
+          atend = true;
+      }
+      if (!atend) {
+        Vaslist valist_struct(nargs, frame);
+        Vaslist_sp valist(&valist_struct);
+        retVal = predicate->apply_raw(nargs, frame->arguments());
+        if (retVal.isTrue() == elementTest) {
+          return elementReturn;
+        }
+      }
     }
   }
-  this->_AtEnd = false;
-  return;
-EMPTY:
-  this->_AtEnd = true;
-}
-
-void ListOfSequenceSteppers::fillValueFrameUsingCurrentSteppers(ActivationFrame_sp frame) const {
-  _G();
-  if (this->_AtEnd)
-    SIMPLE_ERROR(BF("Tried to make list of ended stepper"));
-  int idx = 0;
-  for (auto rit = this->_Steppers.begin(); rit != this->_Steppers.end(); rit++) {
-    frame->set_entry(idx, (*rit)->element());
-    ++idx;
-  }
-}
-
-bool ListOfSequenceSteppers::advanceSteppers() {
-  _OF();
-  if (this->_AtEnd)
-    SIMPLE_ERROR(BF("Tried to advance ended stepper"));
-  for (auto it = this->_Steppers.begin(); it != this->_Steppers.end(); it++) {
-    this->_AtEnd |= (*it)->advance();
-  }
-  return !this->_AtEnd;
-}
-
-class ListOfListSteppers : public ListOfSequenceSteppers {
-public:
-  ListOfListSteppers(List_sp lists);
-  virtual ~ListOfListSteppers(){};
-};
-
-ListOfListSteppers::ListOfListSteppers(List_sp sequences) {
-  _G();
-  for (auto cur : sequences) {
-    T_sp obj = oCar(cur);
-    if (Cons_sp cobj = obj.asOrNull<Cons_O>()) {
-      gctools::tagged_pointer<ConsStepper> cP(gctools::ClassAllocator<ConsStepper>::allocateClass(cobj));
-      this->_Steppers.push_back(cP);
-    } else {
-      goto EMPTY;
-    }
-  }
-  this->_AtEnd = false;
-  return;
-EMPTY:
-  this->_AtEnd = true;
-  return;
-}
-
-bool test_every_some_notevery_notany(Function_sp predicate, List_sp sequences, bool elementTest, bool elementReturn, bool fallThroughReturn, T_sp &retVal) {
-  _G();
-  ListOfSequenceSteppers steppers(sequences);
-  ValueFrame_sp frame(ValueFrame_O::create(steppers.size(), _Nil<ActivationFrame_O>()));
-  if (steppers.atEnd())
-    goto FALLTHROUGH; // return elementReturn;
-  while (!steppers.atEnd()) {
-    steppers.fillValueFrameUsingCurrentSteppers(frame);
-    LOG(BF("Applying predicate to elements[%s]") % frame->asString());
-    retVal = eval::applyToActivationFrame(predicate, frame);
-    bool test = retVal.isTrue();
-    if (test == elementTest) {
-      LOG(BF("element test was %d - returning %d") % elementTest % elementReturn);
-      return elementReturn;
-    }
-    steppers.advanceSteppers();
-  }
-  LOG(BF("passed-through - returning %d") % fallThroughReturn);
 FALLTHROUGH:
   return fallThroughReturn;
 }
 
-#define LOCK_af_every 1
-#define DOCS_af_every "See CLHS for every"
-#define ARGS_af_every "(predicate &rest sequences)"
-#define DECL_af_every ""
-T_sp af_every(T_sp predicate, List_sp sequences) {
-  _G();
+CL_LAMBDA(predicate &rest sequences);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS for every)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__every_list(T_sp predicate, List_sp sequences) {
   Function_sp op = coerce::functionDesignator(predicate);
   T_sp dummy;
   bool result = test_every_some_notevery_notany(op, sequences, false, false, true, dummy);
   return _lisp->_boolean(result);
 }
 
-#define LOCK_af_some 1
-#define DOCS_af_some "See CLHS for some"
-#define ARGS_af_some "(predicate &rest sequences)"
-#define DECL_af_some ""
-T_sp af_some(T_sp predicate, List_sp sequences) {
-  _G();
+CL_LAMBDA(predicate &rest sequences);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS for some)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__some_list(T_sp predicate, List_sp sequences) {
   Function_sp op = coerce::functionDesignator(predicate);
   T_sp retVal;
   bool result = test_every_some_notevery_notany(op, sequences, true, true, false, retVal);
   if (result)
     return retVal;
-  return _Nil<T_O>();
+  return nil<T_O>();
 }
 
-#define LOCK_af_notany 1
-#define DOCS_af_notany "See CLHS for notany"
-#define ARGS_af_notany "(predicate &rest sequences)"
-#define DECL_af_notany ""
-T_sp af_notany(T_sp predicate, List_sp sequences) {
-  _G();
+CL_LAMBDA(predicate &rest sequences);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS for notany)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__notany_list(T_sp predicate, List_sp sequences) {
   Function_sp op = coerce::functionDesignator(predicate);
   T_sp dummy;
   bool result = test_every_some_notevery_notany(op, sequences, true, false, true, dummy);
   return _lisp->_boolean(result);
 }
 
-#define LOCK_af_notevery 1
-#define DOCS_af_notevery "See CLHS for notevery"
-#define ARGS_af_notevery "(predicate &rest sequences)"
-#define DECL_af_notevery ""
-T_sp af_notevery(T_sp predicate, List_sp sequences) {
-  _G();
-  Function_sp op = coerce::functionDesignator(predicate);
-  T_sp dummy;
-  bool result = test_every_some_notevery_notany(op, sequences, false, true, false, dummy);
-  return _lisp->_boolean(result);
-}
-
 /*
   __BEGIN_DOC(candoScript.general.mapcar)
   __END_DOC
 */
-#define LOCK_cl_mapcar 1
-#define DOCS_cl_mapcar "See CLHS for mapcar"
-#define ARGS_cl_mapcar "(func_desig &rest lists)"
-#define DECL_cl_mapcar ""
 SYMBOL_EXPORT_SC_(ClPkg, mapcar);
-T_sp cl_mapcar(T_sp func_desig, List_sp lists) {
-  _G();
+
+CL_LAMBDA(func-desig &rest lists);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS for mapcar)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__mapcar(T_sp func_desig, List_sp lists) {
   Function_sp func = coerce::functionDesignator(func_desig);
-  ListOfListSteppers steppers(lists);
-  ValueFrame_sp frame(ValueFrame_O::create(steppers.size(), _Nil<ActivationFrame_O>()));
-  ql::list result(_lisp);
-  while (!steppers.atEnd()) {
-    steppers.fillValueFrameUsingCurrentSteppers(frame);
-    T_sp res = eval::applyToActivationFrame(func, frame);
-    result << res;
-    steppers.advanceSteppers();
+  if (lists.consp()) {
+    ql::list result;
+    size_t nargs = lists.unsafe_cons()->proper_list_length();
+    MAKE_STACK_FRAME(frame, nargs);
+    bool atend = false;
+    while (!atend) {
+      atend = false;
+      size_t idx = 0;
+      for (auto cur : lists) {
+        List_sp top = CONS_CAR(cur);
+        gctools::fill_frame_one(frame, idx, oCar(top).raw_());
+        if (top.consp()) {
+          cur->rplaca(CONS_CDR(top));
+        } else
+          atend = true;
+      }
+      if (!atend) {
+        result << func->apply_raw(nargs, frame->arguments(0));
+      }
+    }
+    return result.cons();
   }
-  return result.cons();
+  SIMPLE_PROGRAM_ERROR("Mapcar second argument can't be empty", lists);
 }
 
 /*
   __BEGIN_DOC(candoScript.general.mapcar)
   __END_DOC
 */
-#define LOCK_cl_mapc 1
-#define DOCS_cl_mapc "See CLHS mapc"
-#define ARGS_cl_mapc "(op &rest lists)"
-#define DECL_cl_mapc ""
-T_sp cl_mapc(T_sp top, List_sp lists) {
-  _G();
-  Function_sp op = coerce::functionDesignator(top);
-  VectorObjectsWithFillPtr_sp argumentLists(VectorObjectsWithFillPtr_O::make(_Nil<T_O>(), _Nil<T_O>(), 8, 0, true, cl::_sym_T_O));
-  // Copy the arguments into argumentLists
-  for (auto carg : lists) {
-    argumentLists->vectorPushExtend(oCar(carg), 8);
-  }
-  List_sp result, curResult;
-  ValueFrame_sp frame(ValueFrame_O::create(cl_length(argumentLists), _Nil<ActivationFrame_O>()));
-  while (1) {
-    int idx = 0;
-    for (size_t it(0), itEnd(cl_length(argumentLists)); it < itEnd; ++it) {
-      if (argumentLists->operator[](it).nilp()) {
-        // We hit a nil - jump to the end
-        goto RETURN;
+CL_LAMBDA(op &rest lists);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS mapc)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__mapc(T_sp func_desig, List_sp lists) {
+  // mapc function &rest lists+    list-1
+  Function_sp func = coerce::functionDesignator(func_desig);
+  if (lists.consp()) {
+    List_sp result = CONS_CAR(lists);
+    size_t nargs = lists.unsafe_cons()->proper_list_length();
+    MAKE_STACK_FRAME(frame, nargs);
+    bool atend = false;
+    while (!atend) {
+      atend = false;
+      size_t idx = 0;
+      for (auto cur : lists) {
+        List_sp top = CONS_CAR(cur);
+        gctools::fill_frame_one(frame, idx, oCar(top).raw_());
+        if (top.consp()) {
+          cur->rplaca(CONS_CDR(top));
+        } else
+          atend = true;
       }
-      frame->set_entry(idx, oCar(argumentLists->operator[](it)));
-      argumentLists->operator[](it) = oCdr(argumentLists->operator[](it));
-      ++idx;
+      if (!atend) {
+        func->apply_raw(nargs, frame->arguments(0));
+      }
     }
-    LOG(BF("About to evaluate map op[%s] on arguments[%s]") % _rep_(op) % _rep_(frame));
-    T_sp res = eval::applyToActivationFrame(op, frame);
+    return result;
   }
-RETURN:
-  return oCar(lists);
+  SIMPLE_PROGRAM_ERROR("Mapc second argument can't be empty", lists);
 }
 
-#define DOCS_cl_maplist "See CLHS maplist"
-#define ARGS_cl_maplist "(func_desig &rest lists)"
-#define DECL_cl_maplist ""
-T_sp cl_maplist(T_sp func_desig, List_sp lists) {
-  _G();
-  //        printf("%s:%d maplist func_desig=%s   lists=%s\n", __FILE__, __LINE__, _rep_(func_desig).c_str(), _rep_(lists).c_str() );
-  Function_sp op = coerce::functionDesignator(func_desig);
-  VectorObjectsWithFillPtr_sp argumentLists(VectorObjectsWithFillPtr_O::make(_Nil<T_O>(), _Nil<T_O>(), 16, 0, true, cl::_sym_T_O));
-  //	vector<List_sp> argumentLists;
-  // Copy the arguments into argumentLists
-  for (auto carg : lists) {
-    argumentLists->vectorPushExtend(oCar(carg), 8);
-    //	    argumentLists.push_back(oCar(carg));
-  }
-  //        printf("%s:%d  argumentLists = %s\n", __FILE__, __LINE__, _rep_(argumentLists).c_str() );
-  List_sp result, curResult;
-  result = Cons_O::create(_Nil<T_O>(), _Nil<T_O>());
-  ValueFrame_sp frame(ValueFrame_O::create(cl_length(argumentLists), _Nil<ActivationFrame_O>()));
-  curResult = result;
-  while (1) {
-    int idx = 0;
-    //            printf("%s:%d  length(argumentLists) = %d   argumentLists->fillPointer()=%d\n", __FILE__, __LINE__, cl_length(argumentLists), argumentLists->fillPointer() );
-    for (int it(0), itEnd(cl_length(argumentLists)); it < itEnd; ++it) {
-      T_sp val = (*argumentLists)[it];
-      if (val.nilp())
-        goto RETURN; // hit nil in arguments - exit
-      frame->set_entry(idx, val);
-      idx++;
+CL_LAMBDA(func-desig &rest lists);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS maplist)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__maplist(T_sp func_desig, List_sp lists) {
+  Function_sp func = coerce::functionDesignator(func_desig);
+  if (lists.consp()) {
+    ql::list result;
+    size_t nargs = lists.unsafe_cons()->proper_list_length();
+    MAKE_STACK_FRAME(frame, nargs);
+    bool atend = false;
+    while (!atend) {
+      atend = false;
+      size_t idx = 0;
+      for (auto cur : lists) {
+        List_sp top = CONS_CAR(cur);
+        gctools::fill_frame_one(frame, idx, top.raw_());
+        if (top.consp()) {
+          cur->rplaca(CONS_CDR(top));
+        } else
+          atend = true;
+      }
+      if (!atend) {
+        result << func->apply_raw(nargs, frame->arguments());
+      }
     }
-    //            printf("%s:%d op %s on frame: %s\n", __FILE__, __LINE__, _rep_(op).c_str(), _rep_(frame).c_str() );
-    LOG(BF("About to evaluate map op[%s] on arguments[%s]") % _rep_(op) % _rep_(frame));
-    T_sp res = eval::applyToActivationFrame(op, frame);
-    Cons_sp one = Cons_O::create(res);
-    curResult.asCons()->setCdr(one);
-    curResult = one;
-    // Advance to the next element
-    for (int it(0), itEnd(cl_length(argumentLists)); it < itEnd; ++it) {
-      argumentLists->operator[](it) = oCdr(argumentLists->operator[](it));
-      //		*it = cCdr((*it));
-    }
+    return result.cons();
   }
-RETURN:
-  return oCdr(result);
+  SIMPLE_PROGRAM_ERROR("Maplist second argument can't be empty", lists);
 }
 
-#define LOCK_cl_mapl 1
-#define DOCS_cl_mapl "See CLHS maplist"
-#define ARGS_cl_mapl "(op &rest lists)"
-#define DECL_cl_mapl ""
-T_sp cl_mapl(T_sp top, List_sp lists) {
-  _G();
-  Function_sp op = coerce::functionDesignator(top);
-  cl_maplist(op, lists);
-  return oCar(lists);
+CL_LAMBDA(op &rest lists);
+CL_DECLARE();
+CL_UNWIND_COOP(true);
+CL_DOCSTRING(R"dx(See CLHS maplist)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__mapl(T_sp func_desig, List_sp lists) {
+  Function_sp func = coerce::functionDesignator(func_desig);
+  if (lists.consp()) {
+    List_sp result = CONS_CAR(lists);
+    size_t nargs = lists.unsafe_cons()->proper_list_length();
+    MAKE_STACK_FRAME(frame, nargs);
+    bool atend = false;
+    while (!atend) {
+      atend = false;
+      size_t idx = 0;
+      for (auto cur : lists) {
+        List_sp top = CONS_CAR(cur);
+        gctools::fill_frame_one(frame, idx, top.raw_());
+        if (top.consp()) {
+          cur->rplaca(CONS_CDR(top));
+        } else
+          atend = true;
+      }
+      if (!atend) {
+        func->apply_raw(nargs, frame->arguments(0));
+      }
+    }
+    return result;
+  }
+  SIMPLE_PROGRAM_ERROR("Mapl second argument can't be empty", lists);
 }
 
-#define LOCK_af_mapappend 1
-#define DOCS_af_mapappend "mapappend is like mapcar except that the results are appended together - see AMOP 280"
-#define ARGS_af_mapappend "(fun &rest cargs)"
-#define DECL_af_mapappend ""
-T_mv af_mapappend(Function_sp fun, List_sp cargs) {
-  _G();
-  IMPLEMENT_MEF(BF("Fix me - I think I'm broken"));
-  T_sp testNull = eval::funcall(cl::_sym_some, cl::_sym_null->symbolFunction(), cargs);
-  if (testNull.nilp())
-    return (Values(_Nil<T_O>()));
-  T_sp arg0 = eval::funcall(cl::_sym_mapcar, cl::_sym_car->symbolFunction(), cargs);
-  T_sp appendHead = eval::funcall(fun, arg0);
-  T_sp arg2 = eval::funcall(cl::_sym_mapcar, cl::_sym_cdr->symbolFunction(), cargs);
-  T_sp appendTail = eval::funcall(_sym_mapappend, fun, arg2);
-  return eval::funcall(cl::_sym_append, appendHead, appendTail);
+CL_LAMBDA(op &rest lists);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(mapcon)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__mapcon(T_sp op, List_sp lists) {
+  List_sp parts = cl__maplist(op, lists);
+  T_sp result = cl__nconc(parts);
+  return result;
 };
 
-#define ARGS_cl_mapcon "(op &rest lists)"
-#define DECL_cl_mapcon ""
-#define DOCS_cl_mapcon "mapcon"
-T_mv cl_mapcon(T_sp op, List_sp lists) {
-  _G();
-  List_sp parts = cl_maplist(op, lists);
-  T_sp result = cl_nconc(parts);
-  return (Values(result));
+CL_LAMBDA(op &rest lists);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(mapcan)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__mapcan(T_sp op, List_sp lists) {
+  List_sp parts = cl__mapcar(op, lists);
+  T_sp result = cl__nconc(parts);
+  return result;
 };
-
-#define ARGS_cl_mapcan "(op &rest lists)"
-#define DECL_cl_mapcan ""
-#define DOCS_cl_mapcan "mapcan"
-T_mv cl_mapcan(T_sp op, List_sp lists) {
-  _G();
-  List_sp parts = cl_mapcar(op, lists);
-  T_sp result = cl_nconc(parts);
-#if 0
-	ValueFrame_sp frame(ValueFrame_O::create(parts,_Nil<ActivationFrame_O>()));
-	T_sp result = eval::applyToActivationFrame(cl::_sym_nconc,frame);
-#endif
-  return (Values(result));
-};
-
-#define ARGS_macro_backquote "(form env)"
-#define DECL_macro_backquote ""
-#define DOCS_macro_backquote "backquote"
-T_mv macro_backquote(List_sp form, T_sp env) {
-  _G();
-  T_sp arg = oCadr(form);
-  LOG(BF("Expanding backquote going in: %s") % _rep_(arg));
-  T_mv result = af_backquote_completely_process(arg);
-  LOG(BF("Expanded backquote result: %s") % _rep_(result));
-  return (result);
-}
 
 /*!
   Equivalent to Common Lisps append function
@@ -1277,326 +1462,255 @@ T_mv macro_backquote(List_sp form, T_sp env) {
   them together into one list and then points the cdr of the last element of this new list
   to c.
 */
-#define ARGS_af_append "(&rest lists)"
-#define DECL_af_append ""
-#define DOCS_af_append "append as in clhs"
-List_sp af_append(List_sp lists) {
-  _G();
+CL_LAMBDA(core:&va-rest lists);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(append as in clhs)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__append(Vaslist_sp args) {
   ql::list list;
-  LOG(BF("Carrying out append with arguments: %s") % _rep_(lists));
-  auto it = lists.begin();
-  auto end = lists.end();
-  T_sp curit = *it;
-  while (it != end) {
-    curit = *it;
-    it++;
-    if (it == end)
-      break;
-    for (auto inner : (List_sp)oCar(curit)) {
-      list << oCar(inner);
+  LOG("Carrying out append with arguments: {}", _rep_(lists));
+  size_t lenArgs = args->nargs();
+  unlikely_if(lenArgs == 0) return nil<T_O>();
+  T_O* lastArg = (*args)[lenArgs - 1];
+  for (int i(0), iEnd(lenArgs - 1); i < iEnd; ++i) {
+    T_sp curit = args->next_arg();
+    LIKELY_if(curit.consp()) {
+      for (auto inner : (List_sp)curit) {
+        list << CONS_CAR(inner);
+      }
+    }
+    else if (!curit.nilp()) {
+      TYPE_ERROR(curit, cl::_sym_list);
     }
   }
   /* Now append the last argument by setting the new lists last element cdr
        to the last argument of append */
-  T_sp last = oCar(curit);
+  T_sp last((gctools::Tagged)lastArg);
   list.dot(last);
   T_sp res = list.cons();
   return res;
 }
 
-#define ARGS_af_sequence_start_end "(func sequence start end)"
-#define DECL_af_sequence_start_end ""
-#define DOCS_af_sequence_start_end "Copied from ecl::sequence.d::sequence_start_end - throws errors if start/end are out of range for the sequence." \
-                                   " I'm not sure what the func argument is for. If end is nil then it is set to the end of the sequence.  Return MultipleValues(start,end,length)."
-T_mv af_sequence_start_end(T_sp func, T_sp sequence, Fixnum_sp start, T_sp end) {
-  _G();
-  uint len = cl_length(sequence);
+CL_LAMBDA(sequence start end);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Throws errors if start/end are out of range for the sequence.)dx");
+CL_DOCSTRING_LONG(
+    R"dx(I'm not sure what the func argument is for. If end is nil then it is set to the end of the sequence.  Return MultipleValues(start,end,length).)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv core__sequence_start_end(T_sp sequence, Fixnum_sp start, T_sp end) {
+  // the func argument is useless, drop it here and in the caller with-start-end
+  uint len = cl__length(sequence);
   if (end.nilp())
     end = make_fixnum(len);
   Fixnum_sp fnend = gc::As<Fixnum_sp>(end);
   if (unbox_fixnum(start) < 0) {
-    SIMPLE_ERROR(BF("start[%d] must be greater than zero") % _rep_(start));
+    TYPE_ERROR_INDEX_VARIABLE("start[~a] must be greater than zero for sequence ~a", sequence, start, len);
+  }
+  if (unbox_fixnum(start) > len) {
+    TYPE_ERROR_INDEX_VARIABLE("start[~a] must be <= length of sequence[~a]", sequence, start, len);
+  }
+  if (unbox_fixnum(fnend) < 0) {
+    TYPE_ERROR_INDEX_VARIABLE("end[~a] must be greater than zero for sequence ~a", sequence, end, len);
   }
   if (unbox_fixnum(fnend) > len) {
-    SIMPLE_ERROR(BF("end[%d] must be <= length of sequence[%d]") % _rep_(end) % len);
+    TYPE_ERROR_INDEX_VARIABLE("end[~a] must be <= length of sequence[~a]", sequence, end, len);
   }
-  Fixnum_sp length = make_fixnum(len);
   if (unbox_fixnum(fnend) < unbox_fixnum(start)) {
-    SIMPLE_ERROR(BF("end[%d] is less than start[%d]") % _rep_(end) % _rep_(start));
+    SIMPLE_PROGRAM_ERROR_2_ARGS("end[~d] is less than start[~d]", end, start);
   }
-  return (Values(start, fnend, length));
+  return (Values(start, fnend, make_fixnum(len)));
 };
 
-#if 0
-#define ARGS_af_open "(filespec_desig &key (direction :input) element-type if-exists if-does-not-exist (external-format :default))"
-#define DECL_af_open ""
-#define DOCS_af_open ""
-Stream_mv af_open(T_sp filespec_desig, Symbol_sp direction, T_sp element_type, T_sp if_exists, T_sp if_does_not_exist, T_sp external_format )
-{_G();
-    LOG(BF("filespec_desig = %s") % _rep_(filespec_desig) );
-    LOG(BF("direction[%s]") % _rep_(direction) );
-    LOG(BF("if_exists[%s]") % _rep_(if_exists));
-    LOG(BF("if_does_not_exist[%s]") % _rep_(if_does_not_exist));
-    LOG(BF("external_format[%s]") % _rep_(external_format));
-    Pathname_sp filespec = cl_pathname(filespec_desig);
-    if ( direction == kw::_sym_input )
-    {
-	LOG(BF("status"));
-	if ( af_file_kind(filespec) != kw::_sym_file )
-	{
-	    FILE_ERROR(filespec);
-	}
-	if ( external_format == kw::_sym_default )
-	{
-	    LOG(BF("status"));
-	    FDInStream_sp fin = FDInStream_O::create(filespec);
-	    return(Values(fin));
-	    SYMBOL_SC_(KeywordPkg,gzip);
-	}
-	SIMPLE_ERROR(BF("For file[%s] Bad external-format option: %s") % filespec % _rep_(external_format) );
-    } else if ( direction == kw::_sym_output )
-    {
-	LOG(BF("direction was :output"));
-	if ( cl_probe_file(filespec).notnilp() )
-	{
-	    Str_sp truename = cl_namestring(cl_truename(filespec));
-	    LOG(BF("The file[%s] already exists")% truename->get() );
-	    SYMBOL_SC_(KeywordPkg,supersede);
-	    if ( if_exists.nilp() || if_exists == kw::_sym_supersede)
-	    {
-		LOG(BF("supersede"));
-		// First write output to a temporary file and then rename it to the original on close
-		Pathname_sp temporaryFileSpec = af_makePathname(_Nil<T_O>(), // host
-								false, // hostp
-								_Nil<T_O>(), // device
-								false, // devicep
-								_Nil<T_O>(), // directory
-								false, // directoryp
-								_Nil<T_O>(), // name
-								false, // namep
-								Str_O::create(filespec->_Type.as<Str_O>()->get()+"Temp"), //type
-								true, // typep
-								_Nil<T_O>(), // version
-								false, // versionp
-								kw::_sym_local, // scase
-								filespec // defaults
-		    );
-		if ( external_format == kw::_sym_default)
-		{
-		    LOG(BF("external_format is :default"));
-		    FDOutStream_sp fout = FDOutStream_O::createTemporary(temporaryFileSpec,filespec,std::ios_base::out|std::ios_base::trunc);
-		    return(Values(fout));
-		}
-		SYMBOL_SC_(KeywordPkg,error);
-	    } else if ( if_exists == kw::_sym_error )
-	    {
-		FILE_ERROR(filespec);
-		SYMBOL_SC_(KeywordPkg,append);
-	    } else if ( if_exists == kw::_sym_append )
-	    {
-		LOG(BF("if_exists is :append"));
-		if ( external_format != kw::_sym_default)
-		{
-		    SIMPLE_ERROR(BF("You cannot append to a file of external_format[%s]") % _rep_(external_format) );
-		}
-		LOG(BF("Setting up FDOutStream with append"));
-		FDOutStream_sp fout = FDOutStream_O::create(filespec,std::ios_base::ate|std::ios_base::app);
-		return(Values(fout));
-	    }
-	    SIMPLE_ERROR(BF("unknown option[%s] for if-exists") % _rep_(if_exists) );
-	} else
-	{
-	    LOG(BF("File does not exist"));
-	    SYMBOL_SC_(KeywordPkg,create);
-	    if ( if_does_not_exist.nilp() || if_does_not_exist == kw::_sym_create )
-	    {
-		LOG(BF("if_does_not_exist is :create"));
-		if ( external_format == kw::_sym_default)
-		{
-		    LOG(BF("external_format is :default"));
-		    FDOutStream_sp fout = FDOutStream_O::create(filespec,std::ios_base::out|std::ios_base::trunc);
-		    return(Values(fout));
-#if 0
-		} else if ( external_format == kw::_sym_gzip )
-		{
-		    LOG(BF("external_format is :gzip"));
-		    FileOutCompressedStream_sp fout = FileOutCompressedStream_O::createGzip(filespec);
-		    return(Values(fout));
-#endif
-		}
-	    } else if ( if_does_not_exist == kw::_sym_error )
-	    {
-		FILE_ERROR(filespec);
-	    }
-	    LOG(BF("falling through to unimplemented"));
-	    IMPLEMENT_ME();
-	}
-    }
-    LOG(BF("status"));
-    IMPLEMENT_ME();
-}
-#endif
-
-#define ARGS_af_gensym "(&optional x)"
-#define DECL_af_gensym ""
-#define DOCS_af_gensym "See CLHS gensym"
-Symbol_mv af_gensym(T_sp x) {
-  _G();
-  stringstream ss;
-  if (x.nilp()) {
-    int counter = unbox_fixnum(gc::As<Fixnum_sp>(cl::_sym_STARgensym_counterSTAR->symbolValue()));
-    cl::_sym_STARgensym_counterSTAR->setf_symbolValue(make_fixnum(counter + 1));
-    ss << "G";
-    ss << counter;
-  } else if (af_stringP(x)) {
-    int counter = unbox_fixnum(gc::As<Fixnum_sp>(cl::_sym_STARgensym_counterSTAR->symbolValue()));
-    cl::_sym_STARgensym_counterSTAR->setf_symbolValue(make_fixnum(counter + 1));
-    ss << gc::As<Str_sp>(x)->get();
-    ss << counter;
-  } else if (af_integerP(x)) {
-    int counter = clasp_to_int(gc::As<Integer_sp>(x));
-    ASSERTF(counter >= 0, BF("gensym argument %d must be >= 0") % counter);
-    ss << "G";
-    ss << counter;
-  } else {
-    SIMPLE_ERROR(BF("Illegal argument for gensym[%s]") % _rep_(x));
+CL_DEFUN Symbol_sp core__gensym_quick(SimpleBaseString_sp prefix, size_t suffix) {
+  size_t prefixlen = prefix->length();
+  size_t suffixlen = (suffix < 2) ? 1 : std::ceil(std::log10(suffix));
+  auto name = SimpleBaseString_O::make(prefixlen + suffixlen);
+  for (size_t i = 0; i < prefixlen; ++i)
+    (*name)[i] = (*prefix)[i];
+  for (size_t j = prefixlen + suffixlen - 1; j >= prefixlen; --j) {
+    auto div = std::div(suffix, 10);
+    (*name)[j] = div.rem + '0';
+    suffix = div.quot;
   }
-  Symbol_sp sym = Symbol_O::create(ss.str());
-  sym->setPackage(_Nil<Package_O>());
-  return (Values(sym));
+  return Symbol_O::create(name);
 }
 
-#define ARGS_af_type_to_symbol "(x)"
-#define DECL_af_type_to_symbol ""
-#define DOCS_af_type_to_symbol "type_to_symbol"
-Symbol_mv af_type_to_symbol(T_sp x) {
-  _G();
+CL_DEFUN Symbol_sp core__gensym_quick_char(SimpleCharacterString_sp prefix, size_t suffix) {
+  size_t prefixlen = prefix->length();
+  size_t suffixlen = (suffix < 2) ? 1 : std::ceil(std::log10(suffix));
+  auto name = SimpleCharacterString_O::make(prefixlen + suffixlen);
+  for (size_t i = 0; i < prefixlen; ++i)
+    (*name)[i] = (*prefix)[i];
+  for (size_t j = prefixlen + suffixlen - 1; j >= prefixlen; --j) {
+    auto div = std::div(suffix, 10);
+    (*name)[j] = div.rem + '0';
+    suffix = div.quot;
+  }
+  return Symbol_O::create(name);
+}
+
+CL_LAMBDA(&optional (x "G"));
+CL_DECLARE();
+CL_DOCSTRING(R"dx(See CLHS gensym)dx");
+DOCGROUP(clasp);
+CL_DEFUN Symbol_sp cl__gensym(T_sp x) {
+  if (cl__stringp(x)) {
+    Integer_sp counter = gc::As<Integer_sp>(cl::_sym_STARgensym_counterSTAR->symbolValue());
+    if (gc::IsA<SimpleBaseString_sp>(x) && counter.fixnump() && counter.unsafe_fixnum() >= 0) {
+      // fast path
+      // (GENSYM is actually very common in compile time due to
+      //  macroexpansion, at least with the otherwise-quick
+      //  bytecode-compiler. Profiling finds unexpected bottlenecks.)
+      gctools::Fixnum fcounter = counter.unsafe_fixnum();
+      Symbol_sp result = core__gensym_quick(gc::As_unsafe<SimpleBaseString_sp>(x), fcounter);
+      cl::_sym_STARgensym_counterSTAR->setf_symbolValue(Integer_O::create(1 + fcounter));
+      return result;
+    } else if (gc::IsA<SimpleCharacterString_sp>(x) && counter.fixnump() && counter.unsafe_fixnum() >= 0) {
+      // other fast path
+      gctools::Fixnum fcounter = counter.unsafe_fixnum();
+      Symbol_sp result = core__gensym_quick_char(gc::As_unsafe<SimpleCharacterString_sp>(x), fcounter);
+      cl::_sym_STARgensym_counterSTAR->setf_symbolValue(Integer_O::create(1 + fcounter));
+      return result;
+    }
+    String_sp sx = gc::As_unsafe<String_sp>(x);
+    StrNs_sp ss = gc::As_unsafe<StrNs_sp>(core__make_vector(sx->element_type(), 16, true, clasp_make_fixnum(0)));
+    StringPushString(ss, sx);
+    core__integer_to_string(ss, gc::As<Integer_sp>(cl::_sym_STARgensym_counterSTAR->symbolValue()), clasp_make_fixnum(10));
+    // If and only if no explicit suffix is supplied, *gensym-counter* is incremented after it is used.
+    if (clasp_minusp(counter))
+      TYPE_ERROR(counter, cl::_sym_UnsignedByte);
+    if (counter.fixnump()) {
+      Fixnum gensymCounter = counter.unsafe_fixnum() + 1;
+      if (gensymCounter == (MOST_POSITIVE_FIXNUM + 1)) {
+        Integer_sp gensymCounterBignum = Integer_O::create(gensymCounter);
+        cl::_sym_STARgensym_counterSTAR->setf_symbolValue(gensymCounterBignum);
+      } else
+        cl::_sym_STARgensym_counterSTAR->setf_symbolValue(make_fixnum(gensymCounter));
+    } else {
+      // counter must be a bignum, positive
+      // still need to increase the bignum by 1
+      counter = gc::As_unsafe<Integer_sp>(clasp_one_plus(counter));
+      cl::_sym_STARgensym_counterSTAR->setf_symbolValue(counter);
+    }
+    return Symbol_O::create(ss->asMinimalSimpleString());
+  }
+  if ((x.fixnump() || gc::IsA<Integer_sp>(x)) && (!(clasp_minusp(gc::As_unsafe<Integer_sp>(x))))) {
+    SafeBufferStr8Ns ss;
+    ss.string()->vectorPushExtend('G');
+    core__integer_to_string(ss.string(), gc::As_unsafe<Integer_sp>(x), clasp_make_fixnum(10));
+    return Symbol_O::create(ss.string()->asMinimalSimpleString());
+  } else {
+    TYPE_ERROR(x, Cons_O::createList(cl::_sym_or, cl::_sym_string, cl::_sym_UnsignedByte));
+  }
+}
+
+CL_LAMBDA(x);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(type_to_symbol)dx");
+DOCGROUP(clasp);
+CL_DEFUN Symbol_mv core__type_to_symbol(T_sp x) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-variable"
   if (x.fixnump())
     return (Values(cl::_sym_fixnum));
-  else if (Character_sp ccx = x.asOrNull<Character_O>())
+  else if (x.characterp())
     return (Values(cl::_sym_character));
-  else if (SingleFloat_sp sfx = x.asOrNull<SingleFloat_O>())
+  else if (x.single_floatp())
     return (Values(cl::_sym_single_float));
-  else if (x.nilp())
-    return (Values(cl::_sym_Symbol_O)); // Return _sym_null??
-  else if (Symbol_sp sx = x.asOrNull<Symbol_O>())
-    return (Values(cl::_sym_Symbol_O));
   else if (x.consp())
     return (Values(cl::_sym_list));
-  else if (DoubleFloat_sp dfx = x.asOrNull<DoubleFloat_O>())
-    return (Values(cl::_sym_DoubleFloat_O));
-  else if (Bignum_sp bnx = x.asOrNull<Bignum_O>())
-    return (Values(cl::_sym_Bignum_O));
-  else if (Ratio_sp rx = x.asOrNull<Ratio_O>())
-    return (Values(cl::_sym_Ratio_O));
+  else if (x.generalp()) {
+    General_sp gx(x.unsafe_general());
+    if (gc::IsA<DoubleFloat_sp>(gx))
+      return (Values(cl::_sym_DoubleFloat_O));
+    else if (gc::IsA<Symbol_sp>(gx))
+      return (Values(cl::_sym_Symbol_O));
+    else if (gx.nilp())
+      return (Values(cl::_sym_Symbol_O)); // Return _sym_null??
+    else if (gc::IsA<Bignum_sp>(gx))
+      return (Values(cl::_sym_Bignum_O));
+    else if (gc::IsA<Ratio_sp>(gx))
+      return (Values(cl::_sym_Ratio_O));
 #ifdef CLASP_LONG_FLOAT
-  else if (LongFloat_sp lfx = x.asOrNull<LongFloat_O>())
-    return (Values(cl::_sym_LongFloat_O));
+    else if (gc::IsA<LongFloat_sp>(gx))
+      return (Values(cl::_sym_LongFloat_O));
 #endif
-  else if (Complex_sp cx = x.asOrNull<Complex_O>())
-    return (Values(cl::_sym_Complex_O));
-  else if (Package_sp px = x.asOrNull<Package_O>())
-    return (Values(cl::_sym_Package_O));
-  else if (HashTable_sp htx = x.asOrNull<HashTable_O>())
-    return (Values(cl::_sym_HashTable_O));
-  else if (Vector_sp vx = x.asOrNull<Vector_O>())
-    return (Values(cl::_sym_Vector_O));
-  else if (BitVector_sp bvx = x.asOrNull<BitVector_O>())
-    return (Values(cl::_sym_BitVector_O));
-  else if (Array_sp ax = x.asOrNull<Array_O>())
-    return (Values(cl::_sym_Array_O));
-  else if (Str_sp strx = x.asOrNull<Str_O>())
-    return (Values(cl::_sym_String_O));
-  //    else if ( x.isA<BaseString_O>() ) return(Values(_sym_BaseString_O));
-  else if (Stream_sp streamx = x.asOrNull<Stream_O>())
-    return (Values(cl::_sym_Stream_O));
-  else if (ReadTable_sp rtx = x.asOrNull<ReadTable_O>())
-    return (Values(cl::_sym_ReadTable_O));
-  return Values(x->__class()->className());
-  SIMPLE_ERROR(BF("Add af_type_to_symbol support for type: %s") % x->_instanceClass()->classNameAsString());
+    else if (gc::IsA<Complex_sp>(gx))
+      return (Values(cl::_sym_Complex_O));
+    else if (gc::IsA<Package_sp>(gx))
+      return (Values(cl::_sym_Package_O));
+    else if (gc::IsA<HashTable_sp>(gx))
+      return (Values(cl::_sym_HashTable_O));
+    else if (Array_sp ax = gx.asOrNull<Array_O>())
+      // Handle all of the array subclasses using type_as_symbol()
+      return Values(ax->array_type());
+    //    else if ( x.isA<BaseString_sp>() ) return(Values(_sym_BaseString_O));
+    else if (gc::IsA<Stream_sp>(gx))
+      return (Values(cl::_sym_Stream_O));
+    else if (gc::IsA<Readtable_sp>(gx))
+      return (Values(cl::_sym_Readtable_O));
+    return Values(gx->__class()->_className());
+  }
+  SIMPLE_ERROR("Add core__type_to_symbol support for type: {}", cl__class_of(x)->_classNameAsString());
 #pragma clang diagnostic pop
 }
 
+T_sp type_of_decide_class(T_sp cl) {
+  // Return the name of the class if it's a proper name, or else the class.
+  Instance_sp mcl = gc::As<Instance_sp>(cl);
+  T_sp type = mcl->_className();
+  Symbol_sp st = gc::As<Symbol_sp>(type);
+  // Only use the class-name as a type if it's the proper name of the class.
+  if (type.nilp() || cl != T_sp(eval::funcall(cl::_sym_findClass, st, nil<T_O>()))) {
+    type = cl;
+  }
+  return type;
+}
+
 T_sp type_of(T_sp x) {
-  _G();
-  if (x.nilp())
-    return cl::_sym_null;
-#ifdef CLOS
-  if (Instance_sp instance = x.asOrNull<Instance_O>()) {
-    T_sp cl = lisp_instance_class(instance);
-    T_sp t;
-    if (Class_sp mcl = cl.asOrNull<Class_O>()) {
-      t = mcl->className();
-    } else if (Instance_sp icl = cl.asOrNull<Instance_O>()) {
-      (void)icl;
-      DEPRECIATEDP("Classes of instances should always be of Class_O type, not Instance_O");
-      //	    t = icl->_CLASS_NAME();
-    } else {
-      SIMPLE_ERROR(BF("Illegal class %s for instance class of %s") % _rep_(cl) % _rep_(instance));
-    }
-    Symbol_sp st = gc::As<Symbol_sp>(t);
-    if (t.nilp() || cl != T_sp(eval::funcall(cl::_sym_findClass, st, _Nil<T_O>()))) {
-      t = cl;
-    }
-    return t;
-  } else if (Class_sp mc = x.asOrNull<Class_O>()) {
-    Class_sp mcc = lisp_static_class(mc);
-    return mcc->className();
-  } else
-#endif
-      if (x.fixnump()) {
-    ql::list res(_lisp);
+  if (x.fixnump()) {
+    ql::list res;
     res << cl::_sym_integer << x << x;
     return res.cons();
+  } else if (x.consp()) {
+    return cl::_sym_cons;
+  } else if (x.single_floatp()) {
+    return cl::_sym_single_float;
+  } else if (x.valistp()) {
+    return core::_sym_valist;
+  } else if (x.characterp()) {
+    Character_sp character = gc::As_unsafe<Character_sp>(x);
+    if (cl__standard_char_p(character))
+      return cl::_sym_standard_char;
+    else if (clasp_base_char_p(character))
+      return cl::_sym_base_char;
+    else
+      return cl::_sym_character;
   } else if (Integer_sp ix = x.asOrNull<Integer_O>()) {
-    ql::list res(_lisp);
+    ql::list res;
     res << cl::_sym_integer << ix << ix;
     return res.cons();
-  } else if (af_characterP(x)) {
-    if (af_standard_char_p(gc::As<Character_sp>(x)))
-      return cl::_sym_standard_char;
-    return cl::_sym_character;
-  } else if (Symbol_sp symx = x.asOrNull<Symbol_O>()) {
+  }
+#ifdef CLOS
+  else if (Instance_sp instance = x.asOrNull<Instance_O>()) {
+    return type_of_decide_class(lisp_instance_class(instance));
+  } else if (FuncallableInstance_sp instance = x.asOrNull<FuncallableInstance_O>()) {
+    return type_of_decide_class(lisp_instance_class(instance));
+  }
+#endif
+  else if (Symbol_sp symx = x.asOrNull<Symbol_O>()) {
+    if (x.nilp())
+      return cl::_sym_null;
     if (x == _lisp->_true())
       return cl::_sym_boolean;
-    if (af_keywordP(symx))
+    if (cl__keywordp(symx))
       return cl::_sym_keyword;
     return cl::_sym_symbol;
-  } else if (String_sp sx = x.asOrNull<String_O>()) {
-    Symbol_sp t;
-    if (sx->adjustable_array_p() || sx->array_has_fill_pointer_p() || sx->_displaced_array_p()) {
-      t = cl::_sym_array;
-    } else
-      t = cl::_sym_simple_array;
-    return (ql::list(_lisp) << t << cl::_sym_base_char << Cons_O::createList(make_fixnum(1), make_fixnum(cl_length(sx)))).cons();
-  } else if (Vector_sp vx = x.asOrNull<Vector_O>()) {
-    if (vx->adjustable_array_p() || vx->_displaced_array_p()) {
-      return (ql::list(_lisp) << cl::_sym_vector << vx->element_type_as_symbol() << vx->arrayDimensions()).cons();
-    } else if (vx->array_has_fill_pointer_p() /* || (cl_elttype)x->vector.elttype != aet_object) */) {
-      return (ql::list(_lisp) << cl::_sym_simple_array << vx->element_type_as_symbol() << vx->arrayDimensions()).cons();
-    } else {
-      return (ql::list(_lisp) << cl::_sym_simple_vector << make_fixnum(cl_length(vx))).cons();
-    }
-  } else if (Array_sp ax = x.asOrNull<Array_O>()) {
-    Symbol_sp t;
-    if (ax->adjustable_array_p() || ax->_displaced_array_p()) {
-      t = cl::_sym_array;
-    } else
-      t = cl::_sym_simple_array;
-    return (ql::list(_lisp) << t << ax->element_type_as_symbol() << ax->arrayDimensions()).cons();
-  } else if (BitVector_sp bx = x.asOrNull<BitVector_O>()) {
-    Symbol_sp t;
-    if (bx->adjustable_array_p() || bx->array_has_fill_pointer_p() || bx->_displaced_array_p()) {
-      t = cl::_sym_array;
-    } else
-      t = cl::_sym_simple_array;
-    return (ql::list(_lisp) << t << cl::_sym_bit << Cons_O::createList(make_fixnum(1), make_fixnum(cl_length(bx)))).cons();
+  } else if (gc::IsA<Array_sp>(x)) {
+    Array_sp ax = gc::As_unsafe<Array_sp>(x);
+    return ax->type_of();
   } else if (WrappedPointer_sp pp = x.asOrNull<WrappedPointer_O>()) {
-    return pp->_instanceClass()->className();
-  } else if (af_structurep(x)) {
-    return gc::As<StructureObject_sp>(x)->structureType();
+    return pp->_instanceClass()->_className();
   } else if (Stream_sp stx = x.asOrNull<Stream_O>()) {
     if (gc::IsA<SynonymStream_sp>(stx))
       return cl::_sym_SynonymStream_O;
@@ -1614,36 +1728,33 @@ T_sp type_of(T_sp x) {
       return cl::_sym_EchoStream_O;
     else
       return cl::_sym_FileStream_O;
-  } else if (x.consp()) {
-    return cl::_sym_cons;
   } else if (Pathname_sp px = x.asOrNull<Pathname_O>()) {
-    if (af_logicalPathnameP(px)) {
+    if (core__logical_pathname_p(px)) {
       return cl::_sym_logical_pathname;
     } else {
       return cl::_sym_pathname;
     }
   }
-  return af_type_to_symbol(x);
+  return core__type_to_symbol(x);
 }
 
-#define ARGS_af_type_of "(obj)"
-#define DECL_af_type_of ""
-#define DOCS_af_type_of "type_of"
-T_sp af_type_of(T_sp x) {
-  _G();
-  return type_of(x);
-}
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(type_of)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp cl__type_of(T_sp x) { return type_of(x); }
 
-#define ARGS_cl_sxhash "(obj)"
-#define DECL_cl_sxhash ""
-#define DOCS_cl_sxhash "sxhash"
-Integer_sp cl_sxhash(T_sp obj) {
-  _G();
+CL_LAMBDA(obj);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(sxhash)dx");
+DOCGROUP(clasp);
+CL_DEFUN Fixnum_sp cl__sxhash(T_sp obj) {
   if (obj.nilp())
     return make_fixnum(1);
   HashGenerator hg;
   clasp_sxhash(obj, hg);
-  return Integer_O::create(hg.hash());
+  gc::Fixnum hash = hg.rawhash();
+  return clasp_make_fixnum(hash);
 }
 
 // --------------------------------------------------
@@ -1660,629 +1771,426 @@ Integer_sp cl_sxhash(T_sp obj) {
 // --------------------------------------------------
 // --------------------------------------------------
 
-}; /* core */
+}; // namespace core
 
 namespace core {
 
-EXPOSE_CLASS(core, InvocationHistoryFrameIterator_O);
+SYMBOL_EXPORT_SC_(KeywordPkg, next);
+SYMBOL_EXPORT_SC_(KeywordPkg, prev);
+}; // namespace core
 
-bool satisfiesTest(InvocationHistoryFrameIterator_sp iterator, T_sp test) {
-  if (!iterator->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  if (test.nilp())
-    return true;
-  T_sp res = eval::funcall(test, iterator);
-  return res.isTrue();
-}
+namespace core {
 
-void nextInvocationHistoryFrameIteratorThatSatisfiesTest(Fixnum num, InvocationHistoryFrameIterator_sp iterator, T_sp test) {
-  do {
-    if (!iterator->isValid())
-      return;
-    if (satisfiesTest(iterator, test)) {
-      if (num == 0)
-        return;
-      --num;
+CL_LISPIFY_NAME("ext:function-lambda-list");
+CL_LAMBDA(function);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Return the lambda-list of a function designator. Note that
+this is intended for human consumption and so may not
+literally describe the function; e.g. macro and type expander
+functions will have the defmacro/deftype lambda list.)dx")
+DOCGROUP(clasp);
+CL_DEFUN T_mv ext__function_lambda_list(T_sp obj) {
+  if (obj.nilp()) {
+    return Values(nil<T_O>(), nil<T_O>());
+  } else if (Symbol_sp sym = obj.asOrNull<Symbol_O>()) {
+    if (!sym->fboundp()) {
+      return Values(nil<T_O>(), nil<T_O>());
     }
-    iterator->setFrame(iterator->frame()->previous());
-  } while (num >= 0);
+    Function_sp fn = sym->symbolFunction();
+    return Values(ext__function_lambda_list(fn), _lisp->_true());
+  } else if (Function_sp func = obj.asOrNull<Function_O>()) {
+    return Values(func->lambdaList(), _lisp->_true());
+  }
+  return Values(nil<T_O>(), nil<T_O>());
 }
 
-#define ARGS_InvocationHistoryFrameIterator_O_make ""
-#define DECL_InvocationHistoryFrameIterator_O_make ""
-#define DOCS_InvocationHistoryFrameIterator_O_make "Return the InvocationHistoryFrameIterator for the frame that is the (first) that satisfies (test)"
-InvocationHistoryFrameIterator_sp InvocationHistoryFrameIterator_O::make(Fixnum first, T_sp test) {
-  InvocationHistoryFrame *cur = _lisp->invocationHistoryStack().top();
-  InvocationHistoryFrameIterator_sp iterator = InvocationHistoryFrameIterator_O::create();
-  iterator->setFrame(cur);
-  nextInvocationHistoryFrameIteratorThatSatisfiesTest(first, iterator, test);
-  return iterator;
+CL_LAMBDA(function);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(functionSourcePosInfo)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__function_source_pos_info(T_sp functionDesignator) {
+  Function_sp closure = coerce::closureDesignator(functionDesignator);
+  return closure->sourcePosInfo();
 }
 
-InvocationHistoryFrameIterator_sp InvocationHistoryFrameIterator_O::prev(T_sp test) {
-  nextInvocationHistoryFrameIteratorThatSatisfiesTest(1, this->asSmartPtr(), test);
-  return this->asSmartPtr();
-}
+}; // namespace core
 
-T_sp InvocationHistoryFrameIterator_O::functionName() {
-  if (!this->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  gctools::tagged_pointer<Closure> closure = this->_Frame->closure;
-  if (!closure) {
-    SIMPLE_ERROR(BF("Could not access closure of InvocationHistoryFrame"));
-  }
-  return closure->name;
-}
-
-T_sp InvocationHistoryFrameIterator_O::environment() {
-  if (!this->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  gctools::tagged_pointer<Closure> closure = this->_Frame->closure;
-  if (!closure) {
-    SIMPLE_ERROR(BF("Could not access closure of InvocationHistoryFrame"));
-  }
-  return closure->closedEnvironment;
-}
-
-int InvocationHistoryFrameIterator_O::index() {
-  if (!this->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  return this->_Frame->index();
-}
-
-Function_sp InvocationHistoryFrameIterator_O::function() {
-  if (!this->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  gctools::tagged_pointer<Closure> closure = this->_Frame->closure;
-  if (!closure) {
-    SIMPLE_ERROR(BF("Could not access closure of InvocationHistoryFrame"));
-  }
-  return Function_O::make(closure); // Should I really be creating a new Function object every time???
-}
-
-Vector_sp InvocationHistoryFrameIterator_O::arguments() {
-  if (!this->isValid()) {
-    SIMPLE_ERROR(BF("Invalid InvocationHistoryFrameIterator"));
-  }
-  InvocationHistoryFrame *frame = this->_Frame;
-  return frame->arguments();
-}
-
-void InvocationHistoryFrameIterator_O::exposeCando(::core::Lisp_sp lisp) {
-  ::core::class_<InvocationHistoryFrameIterator_O>()
-      .def("frameIteratorFunctionName", &InvocationHistoryFrameIterator_O::functionName)
-      .def("frameIteratorArguments", &InvocationHistoryFrameIterator_O::arguments)
-      .def("frameIteratorEnvironment", &InvocationHistoryFrameIterator_O::environment)
-      .def("frameIteratorIsValid", &InvocationHistoryFrameIterator_O::isValid)
-      .def("frameIteratorPreviousFrame", &InvocationHistoryFrameIterator_O::prev)
-      //	.initArgs("(self)")
-      ;
-  SYMBOL_SC_(CorePkg, makeInvocationHistoryFrameIterator);
-  Defun_maker(CorePkg, InvocationHistoryFrameIterator);
+namespace core {
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__hash256_hex_string(T_sp string) {
+  String_sp sarg = gc::As<String_sp>(string);
+  std::string raw = sarg->get_std_string();
+  std::string result;
+  picosha2::hash256_hex_string(raw.begin(), raw.end(), result);
+  return SimpleBaseString_O::make(result);
 };
 
-void InvocationHistoryFrameIterator_O::exposePython(::core::Lisp_sp lisp) {
-//	PYTHON_CLASS_2BASES(Pkg(),Vector,"","",_LISP)
-#ifdef USEBOOSTPYTHON
-#endif
+#include <clasp/external/hash-library/sha1.cpp>
+#include <clasp/external/hash-library/md5.cpp>
+#include <clasp/external/hash-library/sha256.cpp>
+#include <clasp/external/hash-library/sha1.h>
+#include <clasp/external/hash-library/md5.h>
+#include <clasp/external/hash-library/hmac.h>
+
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__hmac_sha256(SimpleVector_byte8_t_sp data, SimpleVector_byte8_t_sp key) {
+  std::string hash = hmac<SHA256>(&(*data)[0], data->length(), &(*key)[0], key->length());
+  return SimpleBaseString_O::make(hash);
 }
 
-#define ARGS_core_getInvocationHistoryFrameSearch "(idx direction)"
-#define DECL_core_getInvocationHistoryFrameSearch ""
-#define DOCS_core_getInvocationHistoryFrameSearch "getInvocationHistoryFrameSearch - Return an InvocationHistoryFrame as an iterator."                                                               \
-                                                  "If idx == NIL return the top frame. "                                                                                                             \
-                                                  "If idx>=0 return the frame that satisfies *backtrace-frame-selector-hook* that has the index idx if direction==NIL, "                             \
-                                                  "or if direction==:PREV return the frame previous to it (away from the top) or if direction==:NEXT the next frame (towards the top). "             \
-                                                  "*backtrace-frame-selector-hook* is a function that takes an invocation-history-frame-iterator and returns true if it should be in the backtrace." \
-                                                  "Test the result to make sure it is valid."
-InvocationHistoryFrameIterator_sp core_getInvocationHistoryFrameSearch(T_sp idx, Symbol_sp direction) {
-  SYMBOL_EXPORT_SC_(CorePkg, STARbacktraceFrameSelectorHookSTAR);
-  SYMBOL_EXPORT_SC_(KeywordPkg, next);
-  SYMBOL_EXPORT_SC_(KeywordPkg, prev);
-  T_sp backtraceFrameSelectorHook = core::_sym_STARbacktraceFrameSelectorHookSTAR->symbolValue();
-  InvocationHistoryFrameIterator_sp top = InvocationHistoryFrameIterator_O::make(0, backtraceFrameSelectorHook);
-  if (idx.nilp())
-    return top;
-  if (!idx.fixnump()) {
-    SIMPLE_ERROR(BF("The first argument must be nil (for top) or a fixnum >= 0 - was given: %s") % _rep_(idx));
+/*! Provide a list of SimpleVector_byte8_t_sp objects */
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__digest_sha1(List_sp data) {
+  SHA1 digestSha1;
+  for (auto part : data) {
+    SimpleVector_byte8_t_sp bytes = gc::As<SimpleVector_byte8_t_sp>(CONS_CAR(part));
+    digestSha1.add(&((*bytes)[0]), bytes->length());
   }
-  Fixnum fidx = idx.unsafe_fixnum();
-  InvocationHistoryFrameIterator_sp lastSelectedFrame = top;
-  InvocationHistoryFrameIterator_sp cur = top;
-  while (cur->isValid() && fidx != cur->index()) {
-    lastSelectedFrame = cur;
-    cur = cur->prev(backtraceFrameSelectorHook);
+  std::string result = digestSha1.getHash();
+  return SimpleBaseString_O::make(result);
+}
+
+/*! Provide a list of SimpleVector_byte8_t_sp objects */
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__digest_md5(List_sp data) {
+  MD5 digest;
+  for (auto part : data) {
+    SimpleVector_byte8_t_sp bytes = gc::As<SimpleVector_byte8_t_sp>(CONS_CAR(part));
+    digest.add(&((*bytes)[0]), bytes->length());
   }
-  if (direction.nilp())
-    return cur;
-  if (direction == kw::_sym_next)
-    return lastSelectedFrame;
-  if (direction == kw::_sym_prev)
-    return cur->prev(backtraceFrameSelectorHook);
-  SIMPLE_ERROR(BF("Direction argument must be one of NIL, :NEXT, :PREV - received %s") % _rep_(direction));
+  std::string result = digest.getHash();
+  return SimpleBaseString_O::make(result);
 }
 
-#define ARGS_core_getInvocationHistoryFrameTop ""
-#define DECL_core_getInvocationHistoryFrameTop ""
-#define DOCS_core_getInvocationHistoryFrameTop "getInvocationHistoryFrameSearch - Return an top InvocationHistoryFrame as an iterator."
-InvocationHistoryFrameIterator_sp core_getInvocationHistoryFrameTop() {
-  return core_getInvocationHistoryFrameSearch(_Nil<T_O>(), _Nil<T_O>());
+/*! Provide a list of SimpleVector_byte8_t_sp objects */
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__digest_sha256(List_sp data) {
+  SHA256 digest;
+  for (auto part : data) {
+    SimpleVector_byte8_t_sp bytes = gc::As<SimpleVector_byte8_t_sp>(CONS_CAR(part));
+    digest.add(&((*bytes)[0]), bytes->length());
+  }
+  std::string result = digest.getHash();
+  return SimpleBaseString_O::make(result);
 }
 
-#define ARGS_core_getInvocationHistoryFrame ""
-#define DECL_core_getInvocationHistoryFrame ""
-#define DOCS_core_getInvocationHistoryFrame "getInvocationHistoryFrame - Return an indexed InvocationHistoryFrame as an iterator."
-InvocationHistoryFrameIterator_sp core_getInvocationHistoryFrame(int idx) {
-  Fixnum_sp fnidx = clasp_make_fixnum(idx);
-  return core_getInvocationHistoryFrameSearch(fnidx, _Nil<T_O>());
+DOCGROUP(clasp);
+CL_DEFUN SimpleVector_byte8_t_sp core__base_string_to_octets(T_sp tarray) {
+  if (!core__base_string_p(tarray)) {
+    TYPE_ERROR(tarray, cl::_sym_base_string);
+  }
+  if (gc::IsA<SimpleBaseString_sp>(tarray)) {
+    SimpleBaseString_sp sarray = gc::As_unsafe<SimpleBaseString_sp>(tarray);
+    SimpleVector_byte8_t_sp result = SimpleVector_byte8_t_O::make(sarray->length(), 0, false, sarray->length(), &(*sarray)[0]);
+    return result;
+  } else if (gc::IsA<Str8Ns_sp>(tarray)) {
+    Str8Ns_sp sarray = gc::As_unsafe<Str8Ns_sp>(tarray);
+    AbstractSimpleVector_sp basesv;
+    size_t start, end;
+    sarray->asAbstractSimpleVectorRange(basesv, start, end);
+    SimpleBaseString_sp sbs = gc::As_unsafe<SimpleBaseString_sp>(basesv);
+    SimpleVector_byte8_t_sp result = SimpleVector_byte8_t_O::make((end - start), 0, false, (end - start), &(*sbs)[start]);
+    return result;
+  }
+  SIMPLE_ERROR("Don't get here");
 }
 
-#define ARGS_core_getInvocationHistoryFramePrev ""
-#define DECL_core_getInvocationHistoryFramePrev ""
-#define DOCS_core_getInvocationHistoryFramePrev "getInvocationHistoryFramePrev - Return the prev InvocationHistoryFrame before index as an iterator."
-InvocationHistoryFrameIterator_sp core_getInvocationHistoryFramePrev(int idx) {
-  Fixnum_sp fnidx = clasp_make_fixnum(idx);
-  return core_getInvocationHistoryFrameSearch(fnidx, kw::_sym_prev);
+DOCGROUP(clasp);
+CL_DEFUN SimpleVector_byte8_t_sp core__character_string_that_fits_in_base_string_to_octets(T_sp tarray) {
+  if (gc::IsA<SimpleCharacterString_sp>(tarray)) {
+    SimpleCharacterString_sp sarray = gc::As_unsafe<SimpleCharacterString_sp>(tarray);
+    SimpleVector_byte8_t_sp result = SimpleVector_byte8_t_O::make(sarray->length(), 0, false);
+    for (int i = 0; i < sarray->length(); ++i) {
+      int c = (*sarray)[i];
+      (*result)[i] = c;
+    }
+    return result;
+  } else if (gc::IsA<StrWNs_sp>(tarray)) {
+    StrWNs_sp sarray = gc::As_unsafe<StrWNs_sp>(tarray);
+    AbstractSimpleVector_sp basesv;
+    size_t start, end;
+    sarray->asAbstractSimpleVectorRange(basesv, start, end);
+    SimpleVector_byte8_t_sp result = SimpleVector_byte8_t_O::make((end - start), 0, false);
+    for (int i = 0; i < sarray->length(); ++i) {
+      int c = (*sarray)[i];
+      (*result)[i] = c;
+    }
+    return result;
+  }
+  SIMPLE_ERROR("Handle Don't get here");
 }
 
-#define ARGS_core_getInvocationHistoryFrameNext ""
-#define DECL_core_getInvocationHistoryFrameNext ""
-#define DOCS_core_getInvocationHistoryFrameNext "getInvocationHistoryFrameNext - Return the next InvocationHistoryFrame after index as an iterator."
-InvocationHistoryFrameIterator_sp core_getInvocationHistoryFrameNext(int idx) {
-  Fixnum_sp fnidx = clasp_make_fixnum(idx);
-  return core_getInvocationHistoryFrameSearch(fnidx, kw::_sym_next);
+CL_DEFUN void core__test_write_stream() { clasp_write_string(fmt::format("This is a test {} {}", 1, 2, T_sp())); }
+
+CL_LAMBDA(filename &optional (max-lines 0) approach);
+CL_DOCSTRING(R"dx(Count number of lines in text file up to max-lines if max-lines is not 0)dx");
+CL_DOCSTRING_LONG(R"dx(Return (valus number-of-lines file-position size-of-file).)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_mv core__countLinesInFile(const std::string& filename, size_t maxLines, bool approach) {
+  int numberOfLines = 0;
+  int charsSinceLastEol = 0;
+  std::string line;
+  // Use get() - character at a time
+  std::ifstream myfile(filename);
+  char c;
+  if (myfile.is_open()) {
+    do {
+      c = myfile.get();
+      if (c == EOF) {
+        numberOfLines += ((charsSinceLastEol > 0) ? 1 : 0);
+        break;
+      }
+      if (maxLines && (numberOfLines >= maxLines))
+        break;
+      if (c == '\n') {
+        ++numberOfLines;
+        charsSinceLastEol = 0;
+      } else {
+        ++charsSinceLastEol;
+      }
+      if ((numberOfLines & 0xffff) == 0) {
+        gctools::handle_all_queued_interrupts();
+      }
+    } while (true);
+    size_t currentFilePos;
+    size_t sizeOfFile;
+    // Get current position in file
+    struct stat stat_buf;
+    int rc = stat(filename.c_str(), &stat_buf);
+    sizeOfFile = rc == 0 ? stat_buf.st_size : -1;
+    if (c != EOF) {
+      currentFilePos = myfile.tellg();
+    } else {
+      currentFilePos = sizeOfFile;
+    }
+    return Values(make_fixnum(numberOfLines), make_fixnum(currentFilePos), make_fixnum(sizeOfFile));
+  }
+  SIMPLE_ERROR("Could not open file {}", filename);
 }
-};
+}; // namespace core
 
 extern "C" {
-using namespace core;
-#define ARGS_af_ihsBacktraceNoArgs "()"
-#define DECL_af_ihsBacktraceNoArgs ""
-#define DOCS_af_ihsBacktraceNoArgs "ihsBacktraceNoArgs"
-void af_ihsBacktraceNoArgs() {
-  _G();
-  af_ihsBacktrace(_lisp->_true(), _Nil<core::T_O>());
+int add_two_numbers(int x, int y) { return x + y; }
+
+void print_add_two_numbers(int x, int y) { printf("%s:%d %d + %d -> %d\n", __FILE__, __LINE__, x, y, x + y); }
 };
 
-#define ARGS_af_ihsTop "()"
-#define DECL_af_ihsTop ""
-#define DOCS_af_ihsTop "ihsTop"
-int af_ihsTop() {
-  InvocationHistoryFrameIterator_sp top = core_getInvocationHistoryFrameTop();
-  if (!top->isValid())
-    return 0;
-  return top->index();
-};
+SYMBOL_SC_(CorePkg, smartPointerDetails);
+SYMBOL_EXPORT_SC_(ClPkg, null);
+SYMBOL_SC_(CorePkg, unbound);
+SYMBOL_EXPORT_SC_(ClPkg, read);
+SYMBOL_EXPORT_SC_(ClPkg, read_preserving_whitespace);
+SYMBOL_EXPORT_SC_(ClPkg, read_delimited_list);
+SYMBOL_EXPORT_SC_(ClPkg, every);
+SYMBOL_EXPORT_SC_(ClPkg, some);
+SYMBOL_EXPORT_SC_(ClPkg, notevery);
+SYMBOL_EXPORT_SC_(ClPkg, notany);
+SYMBOL_EXPORT_SC_(ClPkg, mapcar);
+SYMBOL_EXPORT_SC_(ClPkg, mapc);
+SYMBOL_EXPORT_SC_(ClPkg, maplist);
+SYMBOL_EXPORT_SC_(ClPkg, mapl);
+SYMBOL_SC_(CorePkg, mapappend);
+SYMBOL_EXPORT_SC_(ClPkg, mapcan);
+SYMBOL_EXPORT_SC_(ClPkg, mapcon);
+SYMBOL_EXPORT_SC_(ClPkg, append);
+SYMBOL_EXPORT_SC_(ClPkg, classOf);
+SYMBOL_EXPORT_SC_(ClPkg, identity);
+SYMBOL_EXPORT_SC_(ClPkg, constantp);
+SYMBOL_SC_(CorePkg, sequence_start_end);
+SYMBOL_EXPORT_SC_(ClPkg, ash);
+SYMBOL_SC_(CorePkg, type_to_symbol);
+SYMBOL_SC_(CorePkg, gdb);
+SYMBOL_SC_(CorePkg, gdbInspect);
+SYMBOL_EXPORT_SC_(ClPkg, gensym);
+SYMBOL_EXPORT_SC_(ClPkg, type_of);
+SYMBOL_EXPORT_SC_(ClPkg, specialOperatorP);
+SYMBOL_EXPORT_SC_(ClPkg, macroFunction);
+SYMBOL_SC_(CorePkg, separatePairList);
+SYMBOL_EXPORT_SC_(ClPkg, set);
+SYMBOL_EXPORT_SC_(ClPkg, gensym);
+SYMBOL_SC_(CorePkg, separatePairList);
+SYMBOL_EXPORT_SC_(ClPkg, gensym);
+SYMBOL_SC_(CorePkg, separatePairList);
+SYMBOL_SC_(CorePkg, testMemoryError);
+SYMBOL_SC_(CorePkg, functionBlockName);
+SYMBOL_SC_(CorePkg, validFunctionNameP);
+SYMBOL_EXPORT_SC_(ClPkg, fdefinition);
+SYMBOL_EXPORT_SC_(ClPkg, fboundp);
+SYMBOL_EXPORT_SC_(ClPkg, fmakunbound);
+SYMBOL_EXPORT_SC_(ClPkg, values);
+SYMBOL_EXPORT_SC_(ClPkg, values_list);
+SYMBOL_EXPORT_SC_(CorePkg, pointer);
+SYMBOL_EXPORT_SC_(CorePkg, toTaggedFixnum);
+SYMBOL_EXPORT_SC_(CorePkg, fromTaggedFixnum);
+SYMBOL_EXPORT_SC_(CorePkg, dumpTaggedFixnum);
+SYMBOL_SC_(CorePkg, ihsBacktrace);
+SYMBOL_SC_(CorePkg, ihsTop);
+SYMBOL_SC_(CorePkg, ihsPrev);
+SYMBOL_SC_(CorePkg, ihsNext);
+SYMBOL_SC_(CorePkg, ihsFun);
+SYMBOL_SC_(CorePkg, ihsEnv);
+SYMBOL_SC_(CorePkg, bdsTop);
+SYMBOL_SC_(CorePkg, bdsVar);
+SYMBOL_SC_(CorePkg, bdsVal);
 
-#define ARGS_af_ihsPrev "(cur)"
-#define DECL_af_ihsPrev ""
-#define DOCS_af_ihsPrev "ihsPrev"
-int af_ihsPrev(int idx) {
-  InvocationHistoryFrameIterator_sp prev = core_getInvocationHistoryFramePrev(idx);
-  if (!prev->isValid())
-    return 0;
-  return prev->index();
-};
+namespace core {
 
-#define ARGS_af_ihsNext "(cur)"
-#define DECL_af_ihsNext ""
-#define DOCS_af_ihsNext "ihsNext"
-int af_ihsNext(int idx) {
-  InvocationHistoryFrameIterator_sp next = core_getInvocationHistoryFrameNext(idx);
-  if (!next->isValid())
-    return 0;
-  return next->index();
-}
-
-#define ARGS_af_ihsFun "(arg)"
-#define DECL_af_ihsFun ""
-#define DOCS_af_ihsFun "ihsFun: return the function in the invocation history stack at i"
-T_sp af_ihsFun(int idx) {
-  InvocationHistoryFrameIterator_sp cur = core_getInvocationHistoryFrame(idx);
-  if (!cur->isValid())
-    return _Nil<T_O>();
-  return cur->function();
-};
-
-#define ARGS_af_ihsArguments "(arg)"
-#define DECL_af_ihsArguments ""
-#define DOCS_af_ihsArguments "ihsArguments: return the arguments to the function in the invocation history stack at i"
-T_sp af_ihsArguments(int idx) {
-  InvocationHistoryFrameIterator_sp cur = core_getInvocationHistoryFrame(idx);
-  if (!cur->isValid())
-    return _Nil<T_O>();
-  return cur->arguments();
-};
-
-#define ARGS_af_ihsEnv "(cur)"
-#define DECL_af_ihsEnv ""
-#define DOCS_af_ihsEnv "ihsEnv"
-T_sp af_ihsEnv(int idx) {
-  InvocationHistoryFrameIterator_sp cur = core_getInvocationHistoryFrame(idx);
-  if (!cur->isValid())
-    return _Nil<T_O>();
-  return cur->environment();
-};
-
-#define ARGS_af_ihsBds "(cur)"
-#define DECL_af_ihsBds ""
-#define DOCS_af_ihsBds "ihsBds"
-int af_ihsBds(int idx) {
-  InvocationHistoryFrameIterator_sp cur = core_getInvocationHistoryFrame(idx);
-  if (!cur->isValid())
-    return 0;
-  return cur->frame()->bds();
-};
-
-#define ARGS_af_ihsCurrentFrame "()"
-#define DECL_af_ihsCurrentFrame ""
-#define DOCS_af_ihsCurrentFrame "ihsCurrentFrame"
-int af_ihsCurrentFrame() {
-  _G();
-  T_sp cf = _sym_STARihsCurrentSTAR->symbolValue();
-  if (cf.nilp()) {
-    int icf = af_ihsTop();
-    return af_setIhsCurrentFrame(icf);
-  }
-  int icf = unbox_fixnum(gc::As<Fixnum_sp>(cf));
-  if (icf < 0) {
-    _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(icf));
-    return 0;
-  }
-  if (icf >= af_ihsTop()) {
-    _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(af_ihsTop()));
-    return af_ihsTop();
-  }
-  return icf;
-}
-
-#define ARGS_af_setIhsCurrentFrame "()"
-#define DECL_af_setIhsCurrentFrame ""
-#define DOCS_af_setIhsCurrentFrame "setIhsCurrentFrame"
-int af_setIhsCurrentFrame(int icf) {
-  _G();
-  if (icf < 0)
-    icf = 0;
-  else if (icf >= af_ihsTop())
-    icf = af_ihsTop();
-  _sym_STARihsCurrentSTAR->setf_symbolValue(make_fixnum(icf));
-  return icf;
-}
-
-#define ARGS_af_bdsTop "()"
-#define DECL_af_bdsTop ""
-#define DOCS_af_bdsTop "bdsTop"
-int af_bdsTop() {
-  return _lisp->bindings().top();
-};
-
-#define ARGS_af_bdsVar "(idx)"
-#define DECL_af_bdsVar ""
-#define DOCS_af_bdsVar "bdsVar"
-Symbol_sp af_bdsVar(int idx) {
-  return _lisp->bindings().var(idx);
-};
-
-#define ARGS_af_bdsVal "(idx)"
-#define DECL_af_bdsVal ""
-#define DOCS_af_bdsVal "bdsVal"
-T_sp af_bdsVal(int idx) {
-  return _lisp->bindings().val(idx);
-};
-
-#define ARGS_core_exceptionStack "()"
-#define DECL_core_exceptionStack ""
-#define DOCS_core_exceptionStack "exceptionStack"
-Vector_sp core_exceptionStack() {
-  return _lisp->exceptionStack().backtrace();
-}
-
-#define ARGS_core_exceptionStackDump "()"
-#define DECL_core_exceptionStackDump ""
-#define DOCS_core_exceptionStackDump "exceptionStackDump"
-void core_exceptionStackDump() {
-  _G();
-  ExceptionStack &stack = _lisp->exceptionStack();
-  printf("Exception stack size: %zu members\n", stack.size());
-  for (int i(0); i < stack.size(); ++i) {
-    string kind;
-    switch (stack[i]._FrameKind) {
-    case CatchFrame:
-      kind = "catch";
-      break;
-    case BlockFrame:
-      kind = "block";
-      break;
-    case TagbodyFrame:
-      kind = "tagbody";
-      break;
-    default:
-      kind = "unknown";
-      break;
-    };
-    printf("Exception exceptionstack[%2d] = %8s %s@%p\n", i, kind.c_str(), _rep_(stack[i]._Key).c_str(), stack[i]._Key.raw_());
-  }
-  printf("----Done----\n");
-};
-
-#define ARGS_core_dynamicBindingStackDump "()"
-#define DECL_core_dynamicBindingStackDump ""
-#define DOCS_core_dynamicBindingStackDump "dynamicBindingStackDump"
-void core_dynamicBindingStackDump(std::ostream &out) {
-  DynamicBindingStack &bd = _lisp->bindings();
-  for (int i(0), iEnd(bd.size()); i < iEnd; ++i) {
-    out << "  dbstack[" << i << " --> " << _rep_(bd.var(i)) << std::endl;
-  };
-}
-
-#define ARGS_af_ihsBacktrace "(&optional (out t) msg)"
-#define DECL_af_ihsBacktrace ""
-#define DOCS_af_ihsBacktrace "ihsBacktrace"
-T_sp af_ihsBacktrace(T_sp outputDesignator, T_sp msg) {
-  _G();
-  T_sp ss;
-  if (outputDesignator.nilp()) {
-    ss = clasp_make_string_output_stream();
+int tak_aux(int x, int y, int z, bool allocate) {
+  if (y < x) {
+    return tak_aux(tak_aux(x - 1, y, z, allocate), tak_aux(y - 1, z, x, allocate), tak_aux(z - 1, x, y, allocate), allocate);
   } else {
-    ss = coerce::outputStreamDesignator(outputDesignator);
+    if (allocate) {
+#ifdef USE_BOEHM
+      GC_MALLOC(128);
+#endif
+    }
+    return z;
   }
-  if (!msg.nilp()) {
-    clasp_writeln_string(((BF("\n%s") % _rep_(msg)).str()), ss);
+}
+
+int tak(int x, int y, int z, bool allocate, int times) {
+  int ret;
+  for (int ii = 0; ii < times; ++ii) {
+    ret = tak_aux(x, y, z, allocate);
   }
-  clasp_writeln_string(((BF("%s") % _lisp->invocationHistoryStack().asString()).str()), ss);
-  if (outputDesignator.nilp()) {
-    return cl_get_output_stream_string(ss);
-  }
-  return _Nil<T_O>();
+  return ret;
+}
+
+struct Ctak {
+  int val;
+  Ctak(int v) : val(v){};
 };
-};
+
+int ctak_aux(int x, int y, int z, bool allocate) {
+  if (!(y < x)) {
+    Ctak ret(z);
+    if (allocate) {
+#ifdef USE_BOEHM
+      GC_MALLOC(128);
+#endif
+    }
+    throw ret;
+  } else {
+    int rx = 0;
+    try {
+      ctak_aux(x - 1, y, z, allocate);
+    } catch (Ctak& val) {
+      rx = val.val;
+    }
+    int ry = 0;
+    try {
+      ctak_aux(y - 1, z, x, allocate);
+    } catch (Ctak& val) {
+      ry = val.val;
+    }
+    int rz = 0;
+    try {
+      ctak_aux(z - 1, x, y, allocate);
+    } catch (Ctak& val) {
+      rz = val.val;
+    }
+    return ctak_aux(rx, ry, rz, allocate);
+  }
+}
+
+int ctak(int x, int y, int z, bool allocate, int times) {
+  int ret = 0;
+  for (int ii = 0; ii < times; ++ii) {
+    try {
+      ctak_aux(x, y, z, allocate);
+    } catch (Ctak& val) {
+      ret = val.val;
+    }
+  }
+  return ret;
+}
+
+CL_DOCSTRING(R"dx(Run the ctak test function (google 'tak function' - this is a try/catch/throw version))dx");
+CL_LAMBDA(x y z &key allocate (times 1));
+DOCGROUP(clasp);
+CL_DEFUN void core__ctak(int x, int y, int z, bool allocate, int times) { ctak(x, y, z, allocate, times); }
+
+CL_DOCSTRING(R"dx(Run the tak test function (google 'tak function'))dx");
+CL_LAMBDA(x y z &key allocate (times 1));
+DOCGROUP(clasp);
+CL_DEFUN void core__tak(int x, int y, int z, bool allocate, int times) { tak(x, y, z, allocate, times); }
+
+}; // namespace core
+
+namespace core {
+
+uint32_t crc32_for_byte(uint32_t r) {
+  for (int j = 0; j < 8; ++j)
+    r = (r & 1 ? 0 : (uint32_t)0xEDB88320L) ^ r >> 1;
+  return r ^ (uint32_t)0xFF000000L;
+}
+
+void crc32(const void* data, size_t n_bytes, uint32_t* crc) {
+  static uint32_t table[0x100];
+  if (!*table)
+    for (size_t i = 0; i < 0x100; ++i)
+      table[i] = crc32_for_byte(i);
+  for (size_t i = 0; i < n_bytes; ++i)
+    *crc = table[(uint8_t)*crc ^ ((uint8_t*)data)[i]] ^ *crc >> 8;
+}
+
+}; // namespace core
+
+namespace core {
+
+CL_DEFUN void core__withStackCons(T_sp car, T_sp cdr, T_sp fn) {
+  gc::StackAllocate<Cons_O> cons(car, cdr);
+  printf("%s:%d:%s The cons size is %lu\n", __FILE__, __LINE__, __FUNCTION__, sizeof(cons));
+  printf("%s:%d:%s The ConsSizeCalculator<Cons_O> size is %lu\n", __FILE__, __LINE__, __FUNCTION__,
+         gctools::ConsSizeCalculator<gctools::RuntimeStage, Cons_O>::value());
+  eval::funcall(fn, cons.asSmartPtr());
+}
+#if 0
+DOCGROUP(clasp);
+CL_DEFUN core::Test_sp core__makeTest() {
+  auto tt = new Test();
+  auto t = gctools::GC<Test_O>::allocate_with_default_constructor();
+  t->set_wrapped(tt);
+  return t;
+}
+#endif
+
+void Test::setMultiplier(int m) { this->multiplier = m; }
+
+void Test::set2(int n0, int n1) {
+  this->numbers.clear();
+  printf("%s:%d In set2 n0-> %d n1-> %d\n", __FILE__, __LINE__, n0, n1);
+  this->numbers.push_back(n0);
+  this->numbers.push_back(n1);
+}
+
+void Test::set3(int n0, int n1, int n2) {
+  this->numbers.clear();
+  this->numbers.push_back(n0);
+  this->numbers.push_back(n1);
+  this->numbers.push_back(n2);
+}
+
+void Test::print_numbers() {
+  int idx = 0;
+  for (auto n : this->numbers) {
+    printf("%s:%d number[%d] -> %d\n", __FILE__, __LINE__, idx, n * this->multiplier);
+    ++idx;
+  }
+}
+
+CL_EXTERN_DEFMETHOD(Test_O, &Test::setMultiplier);
+CL_EXTERN_DEFMETHOD(Test_O, &Test::set2);
+CL_EXTERN_DEFMETHOD(Test_O, &Test::set3);
+CL_EXTERN_DEFMETHOD(Test_O, &Test::print_numbers);
+
+}; // namespace core
 
 namespace core {
 void initialize_primitives() {
-  _G();
   //
   // Define functions first because generics and methods depend on some of them
   //
-  Defun(allRegisteredClassNames);
-
-  SYMBOL_SC_(CorePkg, smartPointerDetails);
-  Defun(smartPointerDetails);
-  SYMBOL_EXPORT_SC_(ClPkg, null);
-  Defun(null);
-
-  SYMBOL_SC_(CorePkg, STARfset);
-  Defun(STARfset);
-
-  SYMBOL_SC_(CorePkg, unbound);
-  Defun(unbound);
-
-  SYMBOL_EXPORT_SC_(ClPkg, read);
-  ClDefun(read);
-
-  SYMBOL_EXPORT_SC_(ClPkg, read_preserving_whitespace);
-  ClDefun(read_preserving_whitespace);
-
-  SYMBOL_EXPORT_SC_(ClPkg, read_delimited_list);
-  Defun(read_delimited_list);
-
-  SYMBOL_EXPORT_SC_(ClPkg, every);
-  Defun(every);
-
-  SYMBOL_EXPORT_SC_(ClPkg, some);
-  Defun(some);
-
-  SYMBOL_EXPORT_SC_(ClPkg, notevery);
-  Defun(notevery);
-
-  SYMBOL_EXPORT_SC_(ClPkg, notany);
-  Defun(notany);
-
-  SYMBOL_EXPORT_SC_(ClPkg, mapcar);
-  ClDefun(mapcar);
-
-  SYMBOL_EXPORT_SC_(ClPkg, mapc);
-  ClDefun(mapc);
-
-  SYMBOL_EXPORT_SC_(ClPkg, maplist);
-  ClDefun(maplist);
-
-  SYMBOL_EXPORT_SC_(ClPkg, mapl);
-  ClDefun(mapl);
-
-  SYMBOL_SC_(CorePkg, mapappend);
-  Defun(mapappend);
-
-  SYMBOL_EXPORT_SC_(ClPkg, mapcan);
-  ClDefun(mapcan);
-
-  SYMBOL_EXPORT_SC_(ClPkg, mapcon);
-  ClDefun(mapcon);
-
-  SYMBOL_SC_(CorePkg, macroexpand_default);
-  Defun(macroexpand_default);
-
-  SYMBOL_EXPORT_SC_(ClPkg, append);
-  Defun(append);
-
-  SYMBOL_EXPORT_SC_(ClPkg, classOf);
-  Defun(classOf);
-
-  SYMBOL_EXPORT_SC_(ClPkg, identity);
-  Defun(identity);
-
-  SYMBOL_EXPORT_SC_(ClPkg, constantp);
-  Defun(constantp);
-
-  SYMBOL_SC_(CorePkg, sequence_start_end);
-  Defun(sequence_start_end);
-
-  //	SYMBOL_EXPORT_SC_(ClPkg,open);
-  //	Defun(open);
-
-  SYMBOL_EXPORT_SC_(ClPkg, ash);
-  ClDefun(ash);
-
-  SYMBOL_SC_(CorePkg, type_to_symbol);
-  Defun(type_to_symbol);
-
-  SYMBOL_SC_(CorePkg, gdb);
-  Defun(gdb);
-  Defun(break);
-  SYMBOL_SC_(CorePkg, gdbInspect);
-  Defun(gdbInspect);
-
-  defmacro(CorePkg, "backquote", &macro_backquote, ARGS_macro_backquote, DECL_macro_backquote, DOCS_macro_backquote, __FILE__, __LINE__);
-
-  SYMBOL_EXPORT_SC_(ClPkg, gensym);
-  Defun(gensym);
-
-  SYMBOL_EXPORT_SC_(ClPkg, type_of);
-  Defun(type_of);
-
-  SYMBOL_EXPORT_SC_(ClPkg, specialOperatorP);
-  ClDefun(specialOperatorP);
-
-  SYMBOL_EXPORT_SC_(ClPkg, macroFunction);
-  ClDefun(macroFunction);
-
-  SYMBOL_SC_(CorePkg, separatePairList);
-  Defun(separatePairList);
-
-  SYMBOL_EXPORT_SC_(ClPkg, makeStringOutputStream);
-  Defun(makeStringOutputStream);
-
-  SYMBOL_EXPORT_SC_(ClPkg, set);
-
-  SYMBOL_EXPORT_SC_(ClPkg, gensym);
-  Defun(gensym);
-
-  SYMBOL_EXPORT_SC_(ClPkg, type_of);
-  Defun(type_of);
-
-  SYMBOL_SC_(CorePkg, separatePairList);
-  Defun(separatePairList);
-
-  SYMBOL_EXPORT_SC_(ClPkg, makeStringOutputStream);
-  Defun(makeStringOutputStream);
-
-  SYMBOL_EXPORT_SC_(ClPkg, gensym);
-  Defun(gensym);
-
-  SYMBOL_EXPORT_SC_(ClPkg, type_of);
-  Defun(type_of);
-
-  //  CoreDefun(treatAsSpecialOperatorP);
-
-  SYMBOL_SC_(CorePkg, separatePairList);
-  Defun(separatePairList);
-
-  SYMBOL_EXPORT_SC_(ClPkg, makeStringOutputStream);
-  Defun(makeStringOutputStream);
-
-  ClDefun(set);
-
-  SYMBOL_SC_(CorePkg, testMemoryError);
-  Defun(testMemoryError);
-
-  SYMBOL_SC_(CorePkg, functionBlockName);
-  Defun(functionBlockName);
-
-  SYMBOL_SC_(CorePkg, validFunctionNameP);
-  Defun(validFunctionNameP);
-
-  SYMBOL_EXPORT_SC_(ClPkg, fdefinition);
-  Defun(fdefinition);
-
-  SYMBOL_EXPORT_SC_(ClPkg, fboundp);
-  Defun(fboundp);
-
-  SYMBOL_EXPORT_SC_(ClPkg, fmakunbound);
-  Defun(fmakunbound);
-
-  SYMBOL_EXPORT_SC_(ClPkg, values);
-  ClDefun(values);
-  CoreDefun(valuesTesting);
-
-  SYMBOL_EXPORT_SC_(ClPkg, values_list);
-  Defun(values_list);
-
-  Defun(isTrue);
-
-  SYMBOL_EXPORT_SC_(CorePkg, pointer);
-  Defun(pointer);
-
-  SYMBOL_EXPORT_SC_(ExtPkg, getEnv);
-  Defun(getEnv);
-  CoreDefun(setenv);
-
-  SYMBOL_EXPORT_SC_(CorePkg, toTaggedFixnum);
-  SYMBOL_EXPORT_SC_(CorePkg, fromTaggedFixnum);
-  SYMBOL_EXPORT_SC_(CorePkg, dumpTaggedFixnum);
-  Defun(toTaggedFixnum);
-  Defun(fromTaggedFixnum);
-  Defun(dumpTaggedFixnum);
-  Defun(dumpAddressOf);
-  Defun(incompleteNextHigherPowerOf_2);
-  Defun(argc);
-  Defun(argv);
-  ClDefun(lispImplementationVersion);
-  ClDefun(lispImplementationType);
-  CoreDefun(lispImplementationId);
-  ClDefun(softwareVersion);
-  ClDefun(softwareType);
-  ClDefun(machineVersion);
-  ClDefun(machineType);
-  ClDefun(machineInstance);
-  ClDefun(sxhash);
-  ClDefun(sleep);
-  CoreDefun(create_tagged_immediate_value_or_nil);
-
-  SYMBOL_SC_(CorePkg, ihsBacktrace);
-  Defun(ihsBacktrace);
-  SYMBOL_SC_(CorePkg, ihsTop);
-  Defun(ihsTop);
-  SYMBOL_SC_(CorePkg, ihsPrev);
-  Defun(ihsPrev);
-  SYMBOL_SC_(CorePkg, ihsNext);
-  Defun(ihsNext);
-  SYMBOL_SC_(CorePkg, ihsFun);
-  Defun(ihsFun);
-  Defun(ihsArguments);
-  SYMBOL_SC_(CorePkg, ihsEnv);
-  Defun(ihsEnv);
-  SYMBOL_SC_(CorePkg, bdsTop);
-  Defun(bdsTop);
-  SYMBOL_SC_(CorePkg, bdsVar);
-  Defun(bdsVar);
-  SYMBOL_SC_(CorePkg, bdsVal);
-  Defun(bdsVal);
-  CoreDefun(exceptionStack);
-  CoreDefun(exceptionStackDump);
-  CoreDefun(trapExecution);
-
-  CoreDefun(method_cache_status);
-  CoreDefun(slot_cache_status);
-  CoreDefun(single_dispatch_method_cache_status);
-  CoreDefun(method_cache_resize);
-  CoreDefun(slot_cache_resize);
-  CoreDefun(single_dispatch_method_cache_resize);
-  CoreDefun(cxx_lambda_list_handler_create_bindings_calls);
-  CoreDefun(describe_cxx_object);
 }
 
-void initializePythonPrimitives(Lisp_sp lisp) {
-  _G();
-#if 0
-	using namespace boost::python;
-	def_raw(CorePkg,"read",&fn_read,ARGS_fn_read,DOCS_fn_read,_LISP);
-#if 0
-	def_raw(CorePkg,"readDelimitedList",&fn_read_delimited_list,ARGS_fn_read_delimited_list,DOCS_fn_read_delimited_list,_LISP);
-#endif
-#endif
-}
-};
+}; // namespace core

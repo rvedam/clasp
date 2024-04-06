@@ -1,9 +1,5 @@
-#ifndef float_to_string_H
-#define float_to_string_H
+#pragma once
 
 namespace core {
-T_sp
-core_float_to_string_free(T_sp buffer_or_nil, Float_sp number,
-                          T_sp e_min, T_sp e_max);
+T_sp core_float_to_string_free(Float_sp number, Number_sp e_min, Number_sp e_max);
 };
-#endif

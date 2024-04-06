@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: intStackQueue.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,10 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef IntStackQueue_H
-#define IntStackQueue_H
 
-#include <clasp/core/foundation.h>
 #include <clasp/core/exceptions.h>
 
 #define INT_QUEUE_SIZE 256
@@ -41,7 +39,7 @@ protected:
   uint _QueueBack;
 
 protected:
-  void advanceQueueIndex(uint &idx);
+  void advanceQueueIndex(uint& idx);
 
 public:
   IntQueue() {
@@ -68,7 +66,7 @@ inline void IntQueue::reset() {
   this->_QueueFront = 0;
 }
 
-inline void IntQueue::advanceQueueIndex(uint &idx) {
+inline void IntQueue::advanceQueueIndex(uint& idx) {
   idx++;
   if (idx >= INT_QUEUE_SIZE)
     idx = 0;
@@ -114,9 +112,7 @@ public:
   void push(int val);
 };
 
-inline void IntStack::reset() {
-  this->_Next = 0;
-}
+inline void IntStack::reset() { this->_Next = 0; }
 
 inline int IntStack::pop() {
   _OF();
@@ -143,6 +139,4 @@ inline string IntStack::asString() {
   }
   return ss.str();
 }
-};
-
-#endif
+}; // namespace core

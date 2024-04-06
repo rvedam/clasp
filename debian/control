@@ -1,0 +1,53 @@
+Source: clasp-cl
+Section: lisp
+Priority: optional
+Maintainer: Tarn W. Burton <twburton@gmail.com>
+Build-Depends: debhelper-compat (= 13), libelf-dev, libgmp-dev, llvm-15,
+	clang-15, sbcl, libclang-15-dev, llvm-15-dev, ninja-build, libfmt-dev,
+	git, pkg-config, libboost-all-dev, libclang-cpp15, libclang-cpp15-dev,
+	libnetcdf-dev, libczmq-dev, libexpat1-dev
+Standards-Version: 4.5.1
+Homepage: https://github.com/clasp-developers/clasp
+Vcs-Browser: https://github.com/clasp-developers/clasp
+Vcs-Git: https://github.com/clasp-developers/clasp.git
+Rules-Requires-Root: no
+
+Package: clasp-cl
+Section: lisp
+Priority: optional
+Conflicts: cando
+Provides: lisp-compiler
+Architecture: any
+Build-Profiles: <!noclasp>
+Depends: ${shlibs:Depends}, ${misc:Depends}, libelf1, libgmp10, libgmpxx4ldbl,
+	llvm-15, clang-15, libclang-cpp15
+Description: Common Lisp implementation that brings Common Lisp and C++ Together
+	Clasp is a new Common Lisp implementation that seamlessly interoperates
+	with C++ libraries and programs using LLVM for compilation to native
+	code. This allows Clasp to take advantage of a vast array of preexisting
+	libraries and programs, such as out of the scientific computing
+	ecosystem. Embedding them in a Common Lisp environment allows you to
+	make use of rapid prototyping, incremental development, and other
+	capabilities that make it a powerful language.
+
+Package: cando
+Section: lisp
+Priority: optional
+Conflicts: clasp-cl
+Provides: lisp-compiler, clasp-cl
+Architecture: any
+Build-Profiles: <!nocando>
+Depends: ${shlibs:Depends}, ${misc:Depends}, libelf-dev, libgmp-dev, llvm-15,
+	clang-15, sbcl, libclang-15-dev, llvm-15-dev, libfmt-dev,
+	libclang-cpp15, libclang-cpp15-dev, libnetcdf-dev, libczmq-dev,
+	libexpat1-dev, ninja-build
+Description: Common Lisp implementation that brings Common Lisp and C++ Together
+	Clasp is a new Common Lisp implementation that seamlessly interoperates
+	with C++ libraries and programs using LLVM for compilation to native
+	code. This allows Clasp to take advantage of a vast array of preexisting
+	libraries and programs, such as out of the scientific computing
+	ecosystem. Embedding them in a Common Lisp environment allows you to
+	make use of rapid prototyping, incremental development, and other
+	capabilities that make it a powerful language. Include Cando which is an
+	open-source, computational chemistry environment for building and
+	designing functional molecules and materials.

@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: userData.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,10 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef core_userData_H
-#define core_userData_H
 
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/lisp.h>
 
@@ -35,17 +33,15 @@ namespace core {
 
 // set this class up by hand
 SMART(LightUserData);
-class LightUserData_O : public core::T_O // StandardObject_O
-                        {
-  LISP_BASE1(core::T_O); // LISP_BASE1(StandardObject_O);
-  LISP_CLASS(core, CorePkg, LightUserData_O, "LightUserData");
+class LightUserData_O : public core::General_O {
+  LISP_CLASS(core, CorePkg, LightUserData_O, "LightUserData", General_O);
 
 public:
-  void *_ptr;
+  void* _ptr;
 
 public:
-  static LightUserData_sp create(void *ptr) {
-    GC_ALLOCATE(LightUserData_O, v);
+  static LightUserData_sp create(void* ptr) {
+    auto v = gctools::GC<LightUserData_O>::allocate_with_default_constructor();
     v->_ptr = ptr;
     return v;
   }
@@ -57,27 +53,25 @@ public:
     }
     return false;
   }
-  void *ptr() const { return this->_ptr; };
+  void* ptr() const { return this->_ptr; };
   explicit LightUserData_O() : Base(), _ptr(NULL){};
   virtual ~LightUserData_O(){};
 };
 
-typedef void (*DestructUserDataFn)(void *data);
+typedef void (*DestructUserDataFn)(void* data);
 
 // set this class up by hand
 SMART(UserData);
-class UserData_O : public core::LightUserData_O // StandardObject_O
-                   {
-  LISP_BASE1(core::LightUserData_O); // LISP_BASE1(StandardObject_O);
-  LISP_CLASS(core, CorePkg, UserData_O, "UserData");
+class UserData_O : public core::LightUserData_O {
+  LISP_CLASS(core, CorePkg, UserData_O, "UserData", core::LightUserData_O);
 
 private:
   DestructUserDataFn _Dtor;
 
 public:
   static UserData_sp create(size_t size, DestructUserDataFn dtor) {
-    GC_ALLOCATE(UserData_O, v);
-    v->_ptr = (void *)malloc(size);
+    auto v = gctools::GC<UserData_O>::allocate_with_default_constructor();
+    v->_ptr = (void*)malloc(size);
     v->_Dtor = dtor;
     return v;
   }
@@ -93,6 +87,4 @@ public:
     }
   };
 };
-};
-
-#endif
+}; // namespace core

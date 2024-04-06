@@ -1,17 +1,18 @@
+
 /*
     File: gc_interface.cc
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,529 +25,1141 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-typedef bool _Bool;
-#include <type_traits>
-//#include <llvm/Support/system_error.h>
-#include <llvm/ExecutionEngine/GenericValue.h>
-#include <llvm/ExecutionEngine/SectionMemoryManager.h>
-#include <llvm/IR/LLVMContext.h>
-#include <llvm/CodeGen/LinkAllCodegenComponents.h>
-#include <llvm/Bitcode/ReaderWriter.h>
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/Support/MemoryBuffer.h>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/DerivedTypes.h>
-#include <llvm/IR/Constants.h>
-#include <llvm/IR/GlobalVariable.h>
-#include <llvm/IR/Function.h>
-#include <llvm/IR/CallingConv.h>
-#include <llvm/IR/BasicBlock.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/Transforms/Instrumentation.h>
-#include <llvm/IR/InlineAsm.h>
-#include <llvm/Support/FormattedStream.h>
-#include <llvm/Support/MathExtras.h>
-#include <llvm/Pass.h>
-#include <llvm/PassManager.h>
-#include <llvm/ADT/SmallVector.h>
-#include <llvm/IR/Verifier.h>
-#include "llvm/IR/AssemblyAnnotationWriter.h" // will be llvm/IR
-//#include <llvm/IR/PrintModulePass.h> // will be llvm/IR  was llvm/Assembly
 
-#include <clang/Frontend/ASTUnit.h>
-#include <clang/AST/Comment.h>
-#include <clang/AST/DeclTemplate.h>
-#include <clang/AST/DeclFriend.h>
-#include <clang/AST/DeclOpenMP.h>
-#include <clang/AST/Stmt.h>
-#include <clang/AST/StmtCXX.h>
-#include <clang/AST/ExprObjC.h>
-#include <clang/AST/StmtObjC.h>
-#include <clang/AST/StmtOpenMP.h>
+#ifndef SCRAPING // #endif at bottom
 
-#include <clang/Basic/Version.h>
-#include <clang/Tooling/JSONCompilationDatabase.h>
-#include <clang/AST/RecursiveASTVisitor.h>
-#include <clang/AST/Comment.h>
-#include <clang/Tooling/Tooling.h>
-#include <clang/Tooling/Refactoring.h>
-#include <clang/Frontend/CompilerInstance.h>
-#include <clang/Frontend/FrontendActions.h>
-#include <clang/AST/ASTConsumer.h>
-#include <clang/AST/ASTContext.h>
-#include <clang/Rewrite/Core/Rewriter.h>
-#include <clang/Lex/Lexer.h>
-#include <clang/Lex/Preprocessor.h>
-#include <clang/ASTMatchers/Dynamic/VariantValue.h>
-#include <clang/ASTMatchers/ASTMatchFinder.h>
-
-#include <clasp/gctools/telemetry.h>
-#include <clasp/gctools/symbolTable.h>
-#include <clasp/sockets/symbolTable.h>
-#include <clasp/serveEvent/symbolTable.h>
-#include <clasp/clbind/symbolTable.h>
-
-#include <clasp/gctools/gctoolsPackage.h>
-
-#include <clasp/core/foundation.h>
-#include <clasp/core/weakPointer.h>
-#include <clasp/core/cxxClass.h>
-#include <clasp/core/random.h>
-#include <clasp/core/weakKeyMapping.h>
-#include <clasp/core/weakHashTable.h>
-#include <clasp/core/bitVector.h>
-#include <clasp/core/smallMultimap.h>
-#include <clasp/core/funcallableStandardClass.h>
-#include <clasp/core/structureClass.h>
-//#include "core/symbolVector.h"
-#include <clasp/core/hashTable.h>
-#include <clasp/core/hashTableEq.h>
-#include <clasp/core/hashTableEql.h>
-#include <clasp/core/hashTableEqual.h>
-#include <clasp/core/hashTableEqualp.h>
-#include <clasp/core/userData.h>
-#include <clasp/core/sexpLoadArchive.h>
-#include <clasp/core/sexpSaveArchive.h>
-#include <clasp/core/loadTimeValues.h>
-#include <clasp/core/specialForm.h>
-#include <clasp/core/singleDispatchGenericFunction.h>
-#include <clasp/core/arguments.h>
-#include <clasp/core/bootStrapCoreSymbolMap.h>
-#include <clasp/core/corePackage.h>
-#include <clasp/core/lambdaListHandler.h>
-#include <clasp/core/package.h>
-#include <clasp/core/character.h>
-#include <clasp/core/reader.h>
-#include <clasp/core/singleDispatchEffectiveMethodFunction.h>
-#include <clasp/core/regex.h>
-#include <clasp/core/structureObject.h>
-#include <clasp/core/forwardReferencedClass.h>
-#include <clasp/core/standardClass.h>
-#include <clasp/core/readtable.h>
-#include <clasp/core/arrayObjects.h>
-#include <clasp/core/arrayDisplaced.h>
-#include <clasp/core/intArray.h>
-#include <clasp/core/lispStream.h>
-#include <clasp/core/primitives.h>
-#include <clasp/core/singleDispatchMethod.h>
-#include <clasp/core/binder.h>
-#include <clasp/core/fileSystem.h>
-#include <clasp/core/vectorDisplaced.h>
-#include <clasp/core/null.h>
-#include <clasp/core/multiStringBuffer.h>
-#include <clasp/core/posixTime.h>
-#include <clasp/core/pointer.h>
-#include <clasp/core/smallMap.h>
-#include <clasp/core/pathname.h>
-#include <clasp/core/strWithFillPtr.h>
-#include <clasp/core/weakHashTable.h>
-
-#include <clasp/clbind/clbind.h>
-
-#include <clasp/cffi/cffi.h>
-
-#include <clasp/llvmo/intrinsics.h>
-#include <clasp/llvmo/llvmoExpose.h>
-#include <clasp/llvmo/debugLoc.h>
-#include <clasp/llvmo/insertPoint.h>
-#include <clasp/llvmo/debugInfoExpose.h>
-
-#include <clasp/asttooling/astExpose.h>
-#include <clasp/asttooling/clangTooling.h>
-#include <clasp/asttooling/astVisitor.h>
-#include <clasp/asttooling/example.h>
-#include <clasp/asttooling/Registry.h>
-#include <clasp/asttooling/Diagnostics.h>
-#include <clasp/asttooling/Marshallers.h>
-#include <clasp/asttooling/testAST.h>
-
-#define GC_INTERFACE_INCLUDE
-#include PROJECT_HEADERS_INCLUDE
-#undef GC_INTERFACE_INCLUDE
-
-#define NAMESPACE_gctools
-#define NAMESPACE_core
-#include <clasp/gctools/gc_interface.h>
-#undef NAMESPACE_gctools
-#undef NAMESPACE_core
-
-extern "C" {
-using namespace gctools;
-
-size_t obj_kind(core::T_O *tagged_ptr) {
-  core::T_O *client = untag_object<core::T_O *>(tagged_ptr);
-  Header_s *header = reinterpret_cast<Header_s *>(ClientPtrToBasePtr(client));
-  return (size_t)(header->kind());
-}
-
-char *obj_kind_name(core::T_O *tagged_ptr) {
-  core::T_O *client = untag_object<core::T_O *>(tagged_ptr);
-  Header_s *header = reinterpret_cast<Header_s *>(ClientPtrToBasePtr(client));
-  return obj_name(header->kind());
-}
-
-char *obj_name(gctools::GCKindEnum kind) {
-  if (kind == KIND_null) {
-    return "UNDEFINED";
-  }
-#ifdef USE_BOEHM
-#ifndef USE_CXX_DYNAMIC_CAST
-#define GC_KIND_NAME_MAP_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_KIND_NAME_MAP_TABLE
-  goto *(KIND_NAME_MAP_table[kind]);
-#define GC_KIND_NAME_MAP
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_KIND_NAME_MAP
-#endif
-#endif
-#ifdef USE_MPS
-#ifndef RUNNING_GC_BUILDER
-#define GC_KIND_NAME_MAP_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_KIND_NAME_MAP_TABLE
-  goto *(KIND_NAME_MAP_table[kind]);
-#define GC_KIND_NAME_MAP
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_KIND_NAME_MAP
-#endif
-#endif
-  return "NONE";
-}
-};
-
-extern "C" {
-/*! I'm using a format_header so MPS gives me the object-pointer */
-void obj_dump_base(void *base) {
-#ifdef USE_BOEHM
-#ifdef USE_CXX_DYNAMIC_CAST
-// Do nothing
-#else
-#ifndef RUNNING_GC_BUILDER
-#define GC_OBJ_DUMP_MAP_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_DUMP_MAP_TABLE
-#endif
-#endif
-#endif
-#ifdef USE_MPS
-#ifndef RUNNING_GC_BUILDER
-#define GC_OBJ_DUMP_MAP_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_DUMP_MAP_TABLE
-#endif
-#endif
-
-#ifdef USE_MPS
-  mps_bool_t inArena = mps_arena_has_addr(_global_arena, base);
-  if (!inArena) {
-    printf("Address@%p is not in the arena\n", base);
-    return;
-  }
-#endif
-  gctools::Header_s *header = reinterpret_cast<gctools::Header_s *>(base);
-  void *client = BasePtrToMostDerivedPtr<void>(base);
-  stringstream sout;
-  if (header->kindP()) {
-    gctools::GCKindEnum kind = header->kind();
-#ifdef USE_BOEHM
-#ifndef USE_CXX_DYNAMIC_CAST
-    goto *(OBJ_DUMP_MAP_table[kind]);
-#define GC_OBJ_DUMP_MAP
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_DUMP_MAP
-#else
-    sout << "BOEHMDC_UNKNOWN"; // do nothing
-#endif
-#endif
-#ifdef USE_MPS
-#ifndef RUNNING_GC_BUILDER
-    goto *(OBJ_DUMP_MAP_table[kind]);
-#define GC_OBJ_DUMP_MAP
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_DUMP_MAP
-#else
-// do nothing
-#endif
-#endif
-#ifdef USE_MPS
-  } else if (header->fwdP()) {
-    void *forwardPointer = header->fwdPointer();
-    sout << "FWD pointer[" << forwardPointer << "] size[" << header->fwdSize() << "]";
-  } else if (header->pad1P()) {
-    sout << "PAD1 size[" << header->pad1Size() << "]";
-  } else if (header->padP()) {
-    sout << "PAD size[" << header->padSize() << "]";
-  } else {
-    sout << "INVALID HEADER!!!!!";
-#endif
-  }
-BOTTOM:
-  printf("%s:%d obj_dump_base: %s\n", __FILE__, __LINE__, sout.str().c_str());
-}
-};
-
-#ifdef USE_MPS
-extern "C" {
-
-using namespace gctools;
-
-/*! I'm using a format_header so MPS gives me the object-pointer */
-mps_addr_t obj_skip(mps_addr_t client) {
-  mps_addr_t oldClient = client;
-// The client must have a valid header
-#ifndef RUNNING_GC_BUILDER
-#define GC_OBJ_SKIP_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_SKIP_TABLE
-#endif
-  gctools::Header_s *header = reinterpret_cast<gctools::Header_s *>(ClientPtrToBasePtr(client));
-  DEBUG_THROW_IF_INVALID_CLIENT(client);
-  if (header->kindP()) {
-    gctools::GCKindEnum kind = header->kind();
-#ifndef RUNNING_GC_BUILDER
-    goto *(OBJ_SKIP_table[kind]);
-#define GC_OBJ_SKIP
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_SKIP
-#else
-    return NULL;
-#endif
-  } else if (header->fwdP()) {
-    client = (char *)(client) + header->fwdSize();
-  } else if (header->pad1P()) {
-    client = (char *)(client) + header->pad1Size();
-  } else if (header->padP()) {
-    client = (char *)(client) + header->padSize();
-  } else {
-    THROW_HARD_ERROR(BF("Illegal header at %p") % header);
-  }
-DONE:
-  GC_TELEMETRY3(telemetry::label_obj_skip,
-                (uintptr_t)oldClient,
-                (uintptr_t)client,
-                (uintptr_t)((char *)client - (char *)oldClient));
-  return client;
-}
-};
-
-int trap_obj_scan = 0;
-
-//core::_sym_STARdebugLoadTimeValuesSTAR && core::_sym_STARdebugLoadTimeValuesSTAR.notnilp()
+#include <clasp/gctools/exposeCommon.h>
 
 namespace gctools {
-#ifndef RUNNING_GC_BUILDER
+
+/* This is where the class_layout codes are included
+from clasp_gc.cc
+They are generated by the layout analyzer. */
+
+Layout_code* get_stamp_layout_codes() {
+  static Layout_code codes[] = {
+#if defined(USE_PRECISE_GC)
+#ifndef RUNNING_PRECISEPREP
+  // sometimes we get sizeof(NIL) - this will quiet those errors
+  // This may be a terrible idea because it may hide deeper problems
+#define NIL uintptr_t
+
 #define GC_OBJ_SCAN_HELPERS
-#include STATIC_ANALYZER_PRODUCT
+#include CLASP_GC_CC
 #undef GC_OBJ_SCAN_HELPERS
+#undef NIL
+#endif // #ifndef RUNNING_PRECISEPREP
+#endif // #if defined(USE_PRECISE_GC)
+    {layout_end, 0, 0, 0, 0, ""}
+  };
+  return &codes[0];
+};
+}; // namespace gctools
+
+#if 0 /// Moved to exposeFunctions1.cc
+
+#ifndef SCRAPING
+#define EXPOSE_FUNCTION_SIGNATURES
+#include INIT_FUNCTIONS_INC_H
+#undef EXPOSE_FUNCTION_SIGNATURES
+#endif
+
+#ifndef SCRAPING
+#define EXPOSE_FUNCTION_BINDINGS_HELPERS
+#undef EXPOSE_FUNCTION_BINDINGS
+#include INIT_FUNCTIONS_INC_H
+#undef EXPOSE_FUNCTION_BINDINGS_HELPERS
+#endif
+
+extern "C" {
+
+#ifndef SCRAPING
+#include C_WRAPPERS_H
 #endif
 };
 
-extern "C" {
-GC_RESULT obj_scan(mps_ss_t ss, mps_addr_t client, mps_addr_t limit) {
-#ifndef RUNNING_GC_BUILDER
-#define GC_OBJ_SCAN_TABLE
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_SCAN_TABLE
+void initialize_exposeFunctions1()
+{
+//  printf("%s:%d About to initialize_functions\n", __FILE__, __LINE__ );
+#ifndef SCRAPING
+#define EXPOSE_FUNCTION_BINDINGS
+#include INIT_FUNCTIONS_INC_H
+#undef EXPOSE_FUNCTION_BINDINGS
 #endif
+};
 
-  GC_TELEMETRY2(telemetry::label_obj_scan_start,
-                (uintptr_t)client,
-                (uintptr_t)limit);
-  mps_addr_t original_client;
-  GCKindEnum kind;
-  MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-    while (client < limit) {
-      // The client must have a valid header
-      DEBUG_THROW_IF_INVALID_CLIENT(client);
-      gctools::Header_s *header = reinterpret_cast<gctools::Header_s *>(ClientPtrToBasePtr(client));
-      original_client = (mps_addr_t)client;
-      if (header->kindP()) {
-        kind = header->kind();
-#ifndef RUNNING_GC_BUILDER
-        goto *(OBJ_SCAN_table[kind]);
-#define GC_OBJ_SCAN
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_OBJ_SCAN
-#endif
-      } else if (header->fwdP()) {
-        client = (char *)(client) + header->fwdSize();
-      } else if (header->pad1P()) {
-        client = (char *)(client) + header->pad1Size();
-      } else if (header->padP()) {
-        client = (char *)(client) + header->padSize();
-      } else {
-        THROW_HARD_ERROR(BF("Illegal header at %p") % header);
-      }
-    TOP:
-      GC_TELEMETRY3(telemetry::label_obj_scan,
-                    (uintptr_t)original_client,
-                    (uintptr_t)client,
-                    (uintptr_t)kind);
-      continue;
-    }
-  }
-  MPS_SCAN_END(GC_SCAN_STATE);
-  return MPS_RES_OK;
+#endif // Moved to exposeFunctions1.cc
+
+extern void initialize_exposeFunctions1();
+extern void initialize_exposeFunctions2();
+extern void initialize_exposeFunctions3();
+
+void initialize_functions() {
+  //  printf("%s:%d About to initialize_functions\n", __FILE__, __LINE__ );
+  initialize_exposeFunctions1();
+  initialize_exposeFunctions2();
+  initialize_exposeFunctions3();
+};
+
+extern "C" {
+using namespace gctools;
+
+size_t obj_kind(core::T_O* tagged_ptr) {
+  const core::T_O* client = untag_object<const core::T_O*>(tagged_ptr);
+  const Header_s* header = reinterpret_cast<const Header_s*>(GeneralPtrToHeaderPtr(client));
+  return (size_t)(header->_badge_stamp_wtag_mtag.stamp_());
 }
 
+const char* obj_kind_name(core::T_O* tagged_ptr) {
+  core::T_O* client = untag_object<core::T_O*>(tagged_ptr);
+  const Header_s* header = reinterpret_cast<const Header_s*>(GeneralPtrToHeaderPtr(client));
+  return obj_name(header->_badge_stamp_wtag_mtag.stamp_());
+}
+
+bool valid_stamp(gctools::stamp_t stamp) {
+#if defined(USE_MPS)
+  size_t stamp_index = (size_t)stamp;
+  if (stamp_index < global_stamp_max)
+    return true;
+  return false;
+#elif defined(USE_BOEHM)
+  if (stamp <= STAMP_UNSHIFT_WTAG(gctools::STAMPWTAG_max)) {
+    return true;
+  }
+  return false;
+#elif defined(USE_MMTK)
+  MISSING_GC_SUPPORT();
+#endif
+}
+const char* obj_name(gctools::stamp_t stamp) {
+#if defined(USE_MPS)
+  if (stamp == (gctools::stamp_t)STAMPWTAG_null) {
+    return "UNDEFINED";
+  }
+  if (stamp > (STAMPWTAG_max))
+    stamp = gctools::GCStamp<core::Instance_O>::StampWtag;
+  size_t stamp_index = (size_t)stamp;
+  ASSERT(stamp_index <= global_stamp_max);
+  //  printf("%s:%d obj_name stamp= %d  stamp_index = %d\n", __FILE__, __LINE__, stamp, stamp_index);
+  return global_stamp_info[stamp_index].name;
+#elif defined(USE_BOEHM)
+  if (stamp <= global_unshifted_nowhere_stamp_names.size()) {
+    //    printf("%s:%d obj_name stamp= %lu\n", __FILE__, __LINE__, stamp);
+    return global_unshifted_nowhere_stamp_names[stamp].c_str();
+  }
+  printf("%s:%d obj_name stamp = %lu is out of bounds - max is %lu\n", __FILE__, __LINE__, (uintptr_t)stamp,
+         global_unshifted_nowhere_stamp_names.size());
+  return "BoehmNoClass";
+#elif defined(USE_MMTK)
+  MISSING_GC_SUPPORT();
+#endif
+}
+
+/*! I'm using a format_header so MPS gives me the object-pointer */
+#define GC_DEALLOCATOR_METHOD
+void obj_deallocate_unmanaged_instance(gctools::smart_ptr<core::T_O> obj) {
+  void* client = &*obj;
+  // The client must have a valid header
+#if defined(USE_PRECISE_GC)
+#ifndef RUNNING_PRECISEPREP
+#define GC_OBJ_DEALLOCATOR_TABLE
+#include CLASP_GC_CC
+#undef GC_OBJ_DEALLOCATOR_TABLE
+#endif
+#endif
+
+  const gctools::Header_s* header = reinterpret_cast<const gctools::Header_s*>(GeneralPtrToHeaderPtr(client));
+  ASSERTF(header->_badge_stamp_wtag_mtag.stampP(), "obj_deallocate_unmanaged_instance called without a valid object");
+  gctools::GCStampEnum stamp = (GCStampEnum)(header->_badge_stamp_wtag_mtag.stamp_());
+#ifndef RUNNING_PRECISEPREP
+#if defined(USE_MPS) || defined(USE_PRECISE_GC)
+  size_t jump_table_index = (size_t)stamp; // - stamp_first_general;
+  printf("%s:%d Calculated jump_table_index %lu\n", __FILE__, __LINE__, jump_table_index);
+  goto*(OBJ_DEALLOCATOR_table[jump_table_index]);
+#define GC_OBJ_DEALLOCATOR
+#include CLASP_GC_CC
+#undef GC_OBJ_DEALLOCATOR
+#endif // USE_MPS
+#endif
+};
+#undef GC_DEALLOCATOR_METHOD
+};
+
+// ----------------------------------------------------------------------
+//
+// Declare all global symbols
+//
+//
+
+#define ADJUST_SYMBOL_INDEX(_xx_) (_xx_ + NUMBER_OF_CORE_SYMBOLS)
+#define DECLARE_ALL_SYMBOLS
+#ifndef SCRAPING
+#include SYMBOLS_SCRAPED_INC_H
+#endif
+#undef DECLARE_ALL_SYMBOLS
+#undef ADJUST_SYMBOL_INDEX
+
+extern "C" {
+using namespace gctools;
+#ifdef USE_MPS
+/*! I'm using a format_header so MPS gives me the object-pointer */
+#define OBJECT_SKIP obj_skip_debug
+#define ADDR_T mps_addr_t
+#define GENERAL_PTR_TO_HEADER_PTR gctools::GeneralPtrToHeaderPtr
+#include "obj_scan.cc"
+#undef GENERAL_PTR_TO_HEADER_PTR
+#undef ADDR_T
+#undef OBJECT_SKIP
+
+mps_addr_t obj_skip(mps_addr_t client) {
+  size_t objectSize;
+  return obj_skip_debug(client, false, objectSize);
+}
+
+mps_addr_t obj_skip_debug_wrong_size(mps_addr_t client, void* header, size_t stamp_wtag_mtag, size_t stamp, size_t allocate_size,
+                                     size_t skip_size, int delta) {
+  printf(
+      "%s:%d Bad size calc header@%p header->stamp_wtag_mtag._value(%lu) obj_skip(stamp %lu) allocate_size -> %lu  obj_skip -> %lu "
+      "delta -> %d\n         About to recalculate the size - connect a debugger and break on obj_skip_debug_wrong_size to trap\n",
+      __FILE__, __LINE__, (void*)header, stamp_wtag_mtag, stamp, allocate_size, skip_size, delta);
+  size_t objectSize;
+  return obj_skip_debug(client, true, objectSize);
+}
+#endif // USE_MPS
+
+#if 0
+#if defined(USE_BOEHM) && defined(USE_PRECISE_GC)
+#define OBJECT_SKIP obj_skip_debug
+#define ADDR_T void*
+#include "obj_scan.cc"
+#undef ADDR_T
+#undef OBJECT_SKIP
+
+void* obj_skip(void* client) {
+  size_t objectSize;
+  return obj_skip_debug(client,false,objectSize);
+}
+#endif
+
+
+
+__attribute__((noinline))  void* obj_skip_debug_wrong_size(void* client,
+                                                           void* header,
+                                                           size_t stamp_wtag_mtag,
+                                                           size_t stamp,
+                                                           size_t allocate_size,
+                                                           size_t skip_size,
+                                                           int delta) {
+  printf("%s:%d Bad size calc header@%p header->stamp_wtag_mtag._value(%lu) obj_skip(stamp %lu) allocate_size -> %lu  obj_skip -> %lu delta -> %d\n         About to recalculate the size - connect a debugger and break on obj_skip_debug_wrong_size to trap\n",
+         __FILE__, __LINE__, (void*)header, stamp_wtag_mtag, stamp, allocate_size, skip_size, delta );
+  size_t objectSize;
+  return obj_skip_debug(client,true,objectSize);
+}
+#endif // #if defined(USE_BOEHM)&&defined(USE_PRECISE_GC)
+};
+
+#ifdef USE_MPS
+
+struct ValidateObjects {};
+
+template <typename Op> inline void operate(core::T_O** ptr) { printf("%s:%d Illegal operate\n", __FILE__, __LINE__); }
+
+template <> inline void operate<ValidateObjects>(core::T_O** ptr) {
+  printf("%s:%d Validate the pointer at %p\n", __FILE__, __LINE__, ptr);
+}
+#endif // USE_MPS
+
+// ------------------------------------------------------------
+//
+// The following MUST match the code in obj_scan
+//
+extern "C" {
+
+#ifdef USE_MPS
+#define SCAN_STRUCT_T mps_ss_t
+#define ADDR_T mps_addr_t
+#define SCAN_BEGIN(xxx) MPS_SCAN_BEGIN(xxx)
+#define SCAN_END(xxx) MPS_SCAN_END(xxx)
+#define RESULT_TYPE GC_RESULT
+#define RESULT_OK MPS_RES_OK
+#define EXTRA_ARGUMENTS
+#define OBJECT_SCAN obj_scan
+#define OBJECT_SKIP_IN_OBJECT_SCAN obj_skip_debug
+#define GENERAL_PTR_TO_HEADER_PTR gctools::GeneralPtrToHeaderPtr
+#include "obj_scan.cc"
+#undef GENERAL_PTR_TO_HEADER_PTR
+#undef OBJECT_SCAN
+#undef EXTRA_ARGUMENTS
+#undef SCAN_STRUCT_T
+#undef RESULT_OK
+#undef RESULT_TYPE
+#endif
+
+#if 0
+#if defined(USE_BOEHM) && defined(USE_PRECISE_GC)
+#define SCAN_STRUCT_T void*
+#define ADDR_T void*
+#define SCAN_BEGIN(xxx)
+#define SCAN_END(xxx)
+#define RESULT_TYPE struct GC_ms_entry*
+#define RESULT_OK msp
+#define EXTRA_ARGUMENTS , struct GC_ms_entry *msp, struct GC_ms_entry *msl
+#define POINTER_FIX(_addr_)                                                                                                        \
+  {                                                                                                                                \
+    gctools::Tagged* taggedP = (gctools::Tagged*)_addr_;                                                                           \
+    if (gctools::tagged_objectp(*taggedP)) {                                                                                       \
+      gctools::Tagged tagged_obj = *taggedP;                                                                                       \
+      gctools::Tagged obj = gctools::untag_object<gctools::Tagged>(tagged_obj);                                                    \
+      msp = ((GC_word)(obj) >= (GC_word)GC_least_plausible_heap_addr && (GC_word)(obj) <= (GC_word)GC_greatest_plausible_heap_addr \
+                 ? GC_mark_and_push((void*)obj, msp, msl, (void**)_addr_)                                                          \
+                 : (msp));                                                                                                         \
+    }                                                                                                                              \
+  }
+#define OBJECT_SCAN obj_mark_low_level
+#define OBJECT_SKIP_IN_OBJECT_SCAN obj_skip_debug
+#define CLIENT_PTR_TO_HEADER_PTR(client) gctools::GeneralPtrToHeaderPtr(client)
+#include "obj_scan.cc"
+#undef CLIENT_PTR_TO_HEADER_PTR
+#undef OBJECT_SCAN
+#undef POINTER_FIX
+#undef EXTRA_ARGUMENTS
+#undef SCAN_STRUCT_T
+#undef RESULT_OK
+#undef RESULT_TYPE
+
+struct GC_ms_entry* object_mark_proc(unsigned long* addr, struct GC_ms_entry *msp, struct GC_ms_entry *msl, GC_word env) {
+  printf("%s:%d In object_mark_proc\n", __FILE__, __LINE__ );
+  return obj_mark_low_level( NULL, (void*)addr, (void*)((char*)addr+1), msp, msl );
+}
+
+#endif // defined(USE_BOEHM)&&defined(USE_PRECISE_GC)
+
+#endif // 0
+};
+
+#if 0 // def USE_MPS
+extern "C" {
 /*! I'm using a format_header so MPS gives me the object-pointer */
 #define GC_FINALIZE_METHOD
 void obj_finalize(mps_addr_t client) {
   // The client must have a valid header
   DEBUG_THROW_IF_INVALID_CLIENT(client);
-#ifndef RUNNING_GC_BUILDER
+  mps_addr_t next_client = obj_skip(client);
+  size_t block_size = (char*)next_client-(char*)client;
+#ifndef RUNNING_PRECISEPREP
 #define GC_OBJ_FINALIZE_TABLE
-#include STATIC_ANALYZER_PRODUCT
+#include CLASP_GC_CC
 #undef GC_OBJ_FINALIZE_TABLE
-#endif
-
-  gctools::Header_s *header = reinterpret_cast<gctools::Header_s *>(ClientPtrToBasePtr(client));
-  ASSERTF(header->kindP(), BF("obj_finalized called without a valid object"));
-  gctools::GCKindEnum kind = (GCKindEnum)(header->kind());
-  GC_TELEMETRY1(telemetry::label_obj_finalize,
-                (uintptr_t)client);
-#ifndef RUNNING_GC_BUILDER
-  goto *(OBJ_FINALIZE_table[kind]);
+#endif // ifndef RUNNING_PRECISEPREP
+  gctools::Header_s *header = reinterpret_cast<gctools::Header_s *>(const_cast<void*>(GeneralPtrToHeaderPtr(client)));
+  ASSERTF(header->_stamp_wtag_mtag.stampP(), "obj_finalized called without a valid object");
+  gctools::GCStampEnum stamp = (GCStampEnum)(header->_stamp_wtag_mtag.stamp_());
+#ifndef RUNNING_PRECISEPREP
+  size_t table_index = (size_t)stamp;
+  goto *(OBJ_FINALIZE_table[table_index]);
 #define GC_OBJ_FINALIZE
-#include STATIC_ANALYZER_PRODUCT
+#include CLASP_GC_CC
 #undef GC_OBJ_FINALIZE
-#else
-// do nothing
-#endif
-};
+#endif // ifndef RUNNING_PRECISEPREP
+ finalize_done:
+  // Now replace the object with a pad object
+  header->_stamp_wtag_mtag.setPadSize(block_size);
+  header->_stamp_wtag_mtag.setPad(Header_s::pad_mtag);
+}; // obj_finalize
+}; // extern "C"
 #undef GC_FINALIZE_METHOD
+#endif // ifdef USE_MPS
 
-vector<core::LoadTimeValues_O **> globalLoadTimeValuesRoots;
-
-void registerLoadTimeValuesRoot(core::LoadTimeValues_O **ptr) {
-  globalLoadTimeValuesRoots.push_back(ptr);
-}
-
-mps_res_t main_thread_roots_scan(mps_ss_t ss, void *gc__p, size_t gc__s) {
-  MPS_SCAN_BEGIN(GC_SCAN_STATE) {
-    GC_TELEMETRY0(telemetry::label_root_scan_start);
-    for (auto &it : globalLoadTimeValuesRoots) {
-      SIMPLE_POINTER_FIX(*it);
-    }
-//            printf("---------Done\n");
-
-// Do I need to fix these pointers explicitly???
-//gctools::global_Symbol_OP_nil       = symbol_nil.raw_();
-//gctools::global_Symbol_OP_unbound   = symbol_unbound.raw_();
-//gctools::global_Symbol_OP_deleted   = symbol_deleted.raw_();
-//gctools::global_Symbol_OP_sameAsKey = symbol_sameAsKey.raw_();
-
-#ifndef RUNNING_GC_BUILDER
+#ifdef USE_MPS
+extern "C" {
+mps_res_t main_thread_roots_scan(mps_ss_t ss, void* gc__p, size_t gc__s) {
+  MPS_SCAN_BEGIN(ss) {
+#ifndef RUNNING_PRECISEPREP
 #define GC_GLOBALS
-#include STATIC_ANALYZER_PRODUCT
+#include CLASP_GC_CC
 #undef GC_GLOBALS
 #endif
-
-#ifndef RUNNING_GC_BUILDER
-#if USE_STATIC_ANALYZER_GLOBAL_SYMBOLS
-#define GC_GLOBAL_SYMBOLS
-#include STATIC_ANALYZER_PRODUCT
-#undef GC_GLOBAL_SYMBOLS
-#else
-
-//
-// Ok, this looks nasty but it allows us to avoid running the static analyzer
-// every time we add or remove a symbol.  Every symbol that is scraped from
-// the source must be listed here and fixed for the garbage collector
-//
-
-#define AstToolingPkg_SYMBOLS
-#define CffiPkg_SYMBOLS
-#define ClPkg_SYMBOLS
-//#define ClangAstPkg_SYMBOLS    // symbols not declared global
-#define ClbindPkg_SYMBOLS
-#define ClosPkg_SYMBOLS
-#define CommonLispUserPkg_SYMBOLS
-#define CompPkg_SYMBOLS
-#define CorePkg_SYMBOLS
-#define ExtPkg_SYMBOLS
-#define GcToolsPkg_SYMBOLS
-#define GrayPkg_SYMBOLS
-#define KeywordPkg_SYMBOLS
-#define LlvmoPkg_SYMBOLS
-//#define MpiPkg_SYMBOLS
-#define ServeEventPkg_SYMBOLS
-#define SocketsPkg_SYMBOLS
-
-#define AstToolingPkg asttooling
-#define CffiPkg cffi
-#define ClPkg cl
-//#define ClangAstPkg clang
-#define ClbindPkg clbind
-#define ClosPkg clos
-#define CommonLispUserPkg
-#define CompPkg comp
-#define CorePkg core
-#define ExtPkg ext
-#define GcToolsPkg gctools
-#define GrayPkg gray
-#define KeywordPkg kw
-#define LlvmoPkg llvmo
-//#define MpiPkg mpi
-#define ServeEventPkg serveEvent
-#define SocketsPkg sockets
-
-#define DO_SYMBOL(sym, id, pkg, name, exprt) SMART_PTR_FIX(pkg::sym)
-#include SYMBOLS_SCRAPED_INC_H
-
-#undef AstToolingPkg
-#undef CffiPkg
-#undef ClPkg
-//#undef ClangAstPkg
-#undef ClbindPkg
-#undef ClosPkg
-#undef CommonLispUserPkg
-#undef CompPkg
-#undef CorePkg
-#undef ExtPkg
-#undef GcToolsPkg
-#undef GrayPkg
-#undef KeywordPkg
-#undef LlvmoPkg
-//#undef MpiPkg
-#undef ServeEventPkg
-#undef SocketsPkg
-
-#undef AstToolingPkg_SYMBOLS
-#undef CffiPkg_SYMBOLS
-#undef ClPkg_SYMBOLS
-//#undef ClangAstPkg_SYMBOLS
-#undef ClbindPkg_SYMBOLS
-#undef ClosPkg_SYMBOLS
-#undef CommonLispUserPkg_SYMBOLS
-#undef CompPkg_SYMBOLS
-#undef CorePkg_SYMBOLS
-#undef ExtPkg_SYMBOLS
-#undef GcToolsPkg_SYMBOLS
-#undef GrayPkg_SYMBOLS
-#undef KeywordPkg_SYMBOLS
-#undef LlvmoPkg_SYMBOLS
-//#undef MpiPkg_SYMBOLS
-#undef ServeEventPkg_SYMBOLS
-#undef SocketsPkg_SYMBOLS
-
-#endif
-#endif // RUNNING_GC_BUILDER
+    for (int i = 0; i < global_symbol_count; ++i) {
+      SMART_PTR_FIX(global_symbols[i]);
+    }
   }
-  MPS_SCAN_END(GC_SCAN_STATE);
-  GC_TELEMETRY0(telemetry::label_root_scan_stop);
+  MPS_SCAN_END(ss);
   return MPS_RES_OK;
 }
 };
+#endif // USE_MPS
 
 //
-// We don't want the static analyzer gc-builder.lsp to see the generated scanners
+// We don't want the static analyzer gc-builder.lisp to see the generated scanners
 //
-#ifndef RUNNING_GC_BUILDER
+#ifdef USE_MPS
+#ifndef RUNNING_PRECISEPREP
+#ifndef SCRAPING
 #define HOUSEKEEPING_SCANNERS
-#include STATIC_ANALYZER_PRODUCT
+#include CLASP_GC_CC
 #undef HOUSEKEEPING_SCANNERS
+#endif // ifdef USE_MPS
+#endif // ifndef RUNNING_PRECISEPREP
+#endif // ifdef USE_MPS
+
+//
+// Bootstrapping
+//
+
+void setup_bootstrap_packages(core::BootStrapCoreSymbolMap* bootStrapSymbolMap) {
+#define BOOTSTRAP_PACKAGES
+#ifndef SCRAPING
+#include SYMBOLS_SCRAPED_INC_H
+#endif
+#undef BOOTSTRAP_PACKAGES
+}
+
+template <class TheClass> void set_one_static_class_symbol(core::BootStrapCoreSymbolMap* symbols, const std::string& full_name) {
+  std::string orig_package_part, orig_symbol_part;
+  core::colon_split(full_name, orig_package_part, orig_symbol_part);
+  std::string package_part, symbol_part;
+  package_part = core::lispify_symbol_name(orig_package_part);
+  symbol_part = core::lispify_symbol_name(orig_symbol_part);
+  //  printf("%s:%d set_one_static_class_symbol --> %s:%s\n", __FILE__, __LINE__, package_part.c_str(), symbol_part.c_str() );
+  core::SymbolStorage store;
+  bool found = symbols->find_symbol(package_part, symbol_part, store);
+  if (!found) {
+    printf("%s:%d ERROR!!!! The static class symbol %s was not found orig_symbol_part=|%s| symbol_part=|%s|!\n", __FILE__, __LINE__,
+           full_name.c_str(), orig_symbol_part.c_str(), symbol_part.c_str());
+    abort();
+  }
+  if (store._PackageName != package_part) {
+    printf("%s:%d For symbol %s there is a mismatch in the package desired %s and the one retrieved %s\n", __FILE__, __LINE__,
+           full_name.c_str(), package_part.c_str(), store._PackageName.c_str());
+    SIMPLE_ERROR("Mismatch of package when setting a class symbol");
+  }
+  //  printf("%s:%d Setting static_class_symbol to %s\n", __FILE__, __LINE__, _safe_rep_(store._Symbol).c_str());
+  TheClass::set_static_class_symbol(store._Symbol);
+}
+
+void set_static_class_symbols(core::BootStrapCoreSymbolMap* bootStrapSymbolMap) {
+#ifndef SCRAPING
+  // Another place where we include INIT_CLASSES_INC_H when USE_PRECISE_GC
+#define SET_CLASS_SYMBOLS
+#include INIT_CLASSES_INC_H
+#undef SET_CLASS_SYMBOLS
+#endif
+}
+
+#define ALLOCATE_ALL_SYMBOLS_HELPERS
+#undef ALLOCATE_ALL_SYMBOLS
+#ifndef SCRAPING
+#include SYMBOLS_SCRAPED_INC_H
+#endif
+#undef ALLOCATE_ALL_SYMBOLS_HELPERS
+
+void allocate_symbols(core::BootStrapCoreSymbolMap* symbols){
+#define ALLOCATE_ALL_SYMBOLS
+#ifndef SCRAPING
+#include SYMBOLS_SCRAPED_INC_H
+#endif
+#undef ALLOCATE_ALL_SYMBOLS
+};
+
+#if 0 // expose classes
+template <class TheClass>
+NOINLINE void set_one_static_class_Header() {
+  ShiftedStamp the_stamp = gctools::NextStampWtag(0 /* Get from the Stamp */,gctools::GCStamp<TheClass>::Stamp);
+  if (gctools::GCStamp<TheClass>::Stamp!=0) {
+    TheClass::static_StampWtagMtag = gctools::Header_s::StampWtagMtag::make_Value<TheClass>();
+  } else {
+#ifdef USE_MPS
+    if (core::global_initialize_builtin_classes) {
+      printf("!\n!\n! %s:%d While initializing builtin classes with MPS clasp\n!\n!\n! A class was found without a Stamp - this happens if you haven't run the static analyzer since adding a class\n! Go run the static analyzer.\n!\n!\n!\n", __FILE__, __LINE__ );
+      abort();
+    }
+#endif
+    TheClass::static_StampWtagMtag = gctools::Header_s::StampWtagMtag::make_unknown(the_stamp);
+  }
+}
+
+
+template <class TheClass>
+NOINLINE  gc::smart_ptr<core::Instance_O> allocate_one_metaclass(UnshiftedStamp theStamp, core::Symbol_sp classSymbol, core::Instance_sp metaClass)
+{
+  core::SimpleFun_sp entryPoint = core::makeSimpleFunAndFunctionDescription<TheClass>(kw::_sym_create);
+  auto cb = gctools::GC<TheClass>::allocate(entryPoint);
+  gc::smart_ptr<core::Instance_O> class_val = core::Instance_O::createClassUncollectable(theStamp,metaClass,REF_CLASS_NUMBER_OF_SLOTS_IN_STANDARD_CLASS,cb);
+  class_val->__setup_stage1_with_sharedPtr_lisp_sid(class_val,classSymbol);
+//  reg::lisp_associateClassIdWithClassSymbol(reg::registered_class<TheClass>::id,TheClass::static_classSymbol());
+//  TheClass::static_class = class_val;
+  _lisp->boot_setf_findClass(classSymbol,class_val);
+//  core::core__setf_find_class(class_val,classSymbol);
+  return class_val;
+}
+
+
+template <class TheClass>
+NOINLINE  gc::smart_ptr<core::Instance_O> allocate_one_class(core::Instance_sp metaClass)
+{
+  core::SimpleFun_sp entryPoint = core::makeSimpleFunAndFunctionDescription<core::BuiltInObjectCreator<TheClass>>(nil<core::T_O>());
+  core::Creator_sp cb = gc::As<core::Creator_sp>(gctools::GC<core::BuiltInObjectCreator<TheClass>>::allocate(entryPoint));
+  TheClass::set_static_creator(cb);
+  gc::smart_ptr<core::Instance_O> class_val = core::Instance_O::createClassUncollectable(TheClass::static_StampWtagMtag.shifted_stamp(),metaClass,REF_CLASS_NUMBER_OF_SLOTS_IN_STANDARD_CLASS,cb);
+  class_val->__setup_stage1_with_sharedPtr_lisp_sid(class_val,TheClass::static_classSymbol());
+  reg::lisp_associateClassIdWithClassSymbol(reg::registered_class<TheClass>::id,TheClass::static_classSymbol());
+  TheClass::setStaticClass(class_val);
+//  core::core__setf_find_class(class_val,TheClass::static_classSymbol()); //,true,nil<core::T_O>()
+  _lisp->boot_setf_findClass(TheClass::static_classSymbol(),class_val);
+  return class_val;
+}
+
+template <class TheMetaClass>
+struct TempClass {
+  static gctools::smart_ptr<TheMetaClass> holder;
+};
+
+
+std::map<std::string,size_t> global_unshifted_nowhere_stamp_name_map;
+std::vector<std::string> global_unshifted_nowhere_stamp_names;
+// Keep track of the where information given an unshifted_nowhere_stamp
+std::vector<size_t> global_unshifted_nowhere_stamp_where_map;
+size_t _global_last_stamp = 0;
+
+//#define DUMP_NAMES 1
+
+void register_stamp_name(const std::string& stamp_name, UnshiftedStamp unshifted_stamp) {
+  if (unshifted_stamp==0) return;
+  size_t stamp_where = gctools::Header_s::StampWtagMtag::get_stamp_where(unshifted_stamp);
+  size_t stamp_num = gctools::Header_s::StampWtagMtag::make_nowhere_stamp(unshifted_stamp);
+#ifdef DUMP_NAMES
+  printf("%s:%d  stamp_num=%u  name=%s\n", __FILE__, __LINE__, stamp_num,stamp_name.c_str());
+#endif
+  global_unshifted_nowhere_stamp_name_map[stamp_name] = stamp_num;
+  if (stamp_num>=global_unshifted_nowhere_stamp_names.size()) {
+    global_unshifted_nowhere_stamp_names.resize(stamp_num+1,"");
+  }
+  global_unshifted_nowhere_stamp_names[stamp_num] = stamp_name;
+  if (stamp_num>=global_unshifted_nowhere_stamp_where_map.size()) {
+    global_unshifted_nowhere_stamp_where_map.resize(stamp_num+1,0);
+  }
+  global_unshifted_nowhere_stamp_where_map[stamp_num] = stamp_where;
+}
+
+void define_builtin_cxx_classes() {
+#ifndef SCRAPING
+#define GC_ENUM_NAMES
+#if !defined(USE_PRECISE_GC)
+#include INIT_CLASSES_INC_H
+#else
+#include CLASP_GC_CC
+#endif
+#undef GC_ENUM_NAMES
+#endif
+}
+
+
+void create_packages()
+{
+#define CREATE_ALL_PACKAGES
+#ifndef SCRAPING
+#include SYMBOLS_SCRAPED_INC_H
+#endif
+#undef CREATE_ALL_PACKAGES
+}
+
+
+void define_base_classes()
+{
+  IMPLEMENT_MEF("define_base_classes");
+}
+
+
+void calculate_class_precedence_lists()
+{
+  IMPLEMENT_MEF("calculate_class_precendence_lists");
+}
+
+// ------------------------------------------------------------
+//
+// Generate type specifier -> header value (range) map
+//
+
+template <typename TSingle>
+void add_single_typeq_test(const string& cname, core::HashTable_sp theMap) {
+  Fixnum header_val = gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TSingle>();
+//  printf("%s:%d Header value for type %s -> %lld    stamp: %u  flags: %zu\n", __FILE__, __LINE__, _rep_(TSingle::static_class_symbol).c_str(), header_val, gctools::GCStamp<TSingle>::Stamp, gctools::GCStamp<TSingle>::Flags);
+  theMap->setf_gethash(TSingle::static_classSymbol(),core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TSingle>()));
+}
+
+template <typename TRangeFirst,typename TRangeLast>
+void add_range_typeq_test(const string& cname, core::HashTable_sp theMap) {
+  
+  theMap->setf_gethash(TRangeFirst::static_classSymbol(),
+                       core::Cons_O::create(core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TRangeFirst>()),
+                                            core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TRangeLast>())));
+}
+template <typename TSingle>
+void add_single_typeq_test_instance(core::HashTable_sp theMap) {
+  theMap->setf_gethash(TSingle::static_classSymbol(),core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TSingle>()));
+}
+
+template <typename TRangeFirst,typename TRangeLast>
+void add_range_typeq_test_instance(core::HashTable_sp theMap) {
+  theMap->setf_gethash(TRangeFirst::static_classSymbol(),
+                       core::Cons_O::create(core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TRangeFirst>()),
+                                            core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<TRangeLast>())));
+}
+  
+void initialize_typeq_map() {
+  core::HashTableEqual_sp classNameToLispName = core::HashTableEqual_O::create_default();
+  core::HashTableEq_sp theTypeqMap = core::HashTableEq_O::create_default();
+#define ADD_SINGLE_TYPEQ_TEST(type, stamp)                                                                                         \
+  {                                                                                                                                \
+    classNameToLispName->setf_gethash(core::SimpleBaseString_O::make(#type), type::static_classSymbol());                          \
+    theTypeqMap->setf_gethash(type::static_classSymbol(),                                                                          \
+                              core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<type>()));                   \
+  }
+#define ADD_RANGE_TYPEQ_TEST(type_low, type_high, stamp_low, stamp_high)                                                           \
+  {                                                                                                                                \
+    classNameToLispName->setf_gethash(core::SimpleBaseString_O::make(#type_low), type_low::static_classSymbol());                  \
+    theTypeqMap->setf_gethash(                                                                                                     \
+        type_low::static_classSymbol(),                                                                                            \
+        core::Cons_O::create(core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<type_low>()),                 \
+                             core::make_fixnum(gctools::Header_s::StampWtagMtag::GenerateHeaderValue<type_high>())));              \
+  }
+#ifndef SCRAPING
+#if !defined(USE_PRECISE_GC)
+#define GC_TYPEQ
+#include INIT_CLASSES_INC_H // REPLACED CLASP_GC_CC
+#undef GC_TYPEQ
+#else
+#define GC_TYPEQ
+#include CLASP_GC_CC
+#undef GC_TYPEQ
+#endif
+#endif
+  core::_sym__PLUS_class_name_to_lisp_name_PLUS_->defparameter(classNameToLispName);
+  core::_sym__PLUS_type_header_value_map_PLUS_->defparameter(theTypeqMap);
+};
+
+// ----------------------------------------------------------------------
+//
+// Expose classes and methods
+//
+// Code generated by scraper
+//
+//
+#include <clasp/core/wrappers.h>
+#include <clasp/core/external_wrappers.h>
+
+#ifndef SCRAPING
+// include INIT_CLASSES_INC_H despite USE_PRECISE_GC
+#define EXPOSE_STATIC_CLASS_VARIABLES
+#include INIT_CLASSES_INC_H
+#undef EXPOSE_STATIC_CLASS_VARIABLES
 #endif
 
-#endif // ifdef USE_MPS
+#ifndef SCRAPING
+// include INIT_CLASSES_INC_H despite USE_PRECISE_GC
+#define EXPOSE_METHODS
+#include INIT_CLASSES_INC_H
+#undef EXPOSE_METHODS
+#endif
+
+void initialize_enums()
+{
+// include INIT_CLASSES_INC_H despite USE_PRECISE_GC
+#ifndef SCRAPING
+#define ALL_ENUMS
+#include <generated/enum_inc.h>
+#undef ALL_ENUMS
+#endif
+};
+
+#endif // #if 0  expose classes
+
+extern void initialize_exposeClasses1();
+extern void initialize_exposeClasses2();
+extern void initialize_exposeClasses3();
+
+void initialize_classes_and_methods() {
+  initialize_exposeClasses1();
+  initialize_exposeClasses2();
+  initialize_exposeClasses3();
+}
+
+#if 0
+#define MPS_LOG(x) printf("%s:%d %s\n", __FILE__, __LINE__, x);
+#else
+#define MPS_LOG(x)
+#endif
+
+void dumpBoehmLayoutTables(std::ostream& fout) {
+#define LAYOUT_STAMP(_class_) (gctools::GCStamp<_class_>::StampWtag >> gctools::BaseHeader_s::wtag_width)
+  fmt::print(fout, "# dumpBoehmLayoutTables when static analyzer output is not available\n");
+#define Init_class_kind(_class_)                                                                                                   \
+  fmt::print(fout, "Init_class_kind( stamp={}, name=\"{}\", size={});\n", LAYOUT_STAMP(_class_), #_class_, sizeof(*(_class_*)0x0));
+#define Init_templated_kind(_class_)                                                                                               \
+  fmt::print(fout, "Init_templated_kind( stamp={}, name=\"{}\", size={});\n", LAYOUT_STAMP(_class_), #_class_,                     \
+             sizeof(*(_class_*)0x0));
+#define Init__fixed_field(_class_, _index_, _type_, _field_name_)                                                                  \
+  fmt::print(fout, "Init__fixed_field( stamp={}, index={}, data_type={},field_name=\"{}\",field_offset={});\n",                    \
+             LAYOUT_STAMP(_class_), _index_, (int)_type_, #_field_name_, offsetof(_class_, _field_name_));
+#define Init__variable_array0(_class_, _data_field_)                                                                               \
+  fmt::print(fout, "Init__variable_array0( stamp={}, name=\"{}\", offset={} );\n", LAYOUT_STAMP(_class_), #_data_field_,           \
+             offsetof(_class_, _data_field_));
+#define Init__variable_capacity(_class_, _value_type_, _end_, _capacity_)                                                          \
+  fmt::print(fout, "Init__variable_capacity( stamp={}, element_size={}, end_offset={}, capacity_offset={} );\n",                   \
+             LAYOUT_STAMP(_class_), sizeof(_class_::_value_type_), offsetof(_class_, _end_), offsetof(_class_, _capacity_));
+#define Init__variable_field(_class_, _data_type_, _index_, _field_name_, _field_offset_)                                          \
+  fmt::print(fout, "Init__variable_field( stamp={}, index={}, data_type={}, field_name=\"{}\", field_offset={} );\n",              \
+             LAYOUT_STAMP(_class_), _index_, (int)_data_type_, _field_name_, _field_offset_);
+#define Init_global_ints(_name_, _value_) fmt::print(fout, "Init_global_ints(name=\"{}\",value={});\n", _name_, _value_);
+  printf("Dumping interface\n");
+  gctools::dump_data_types(fout, "");
+  //  core::registerOrDumpDtreeInfo(fout);
+  Init_class_kind(core::T_O);
+  Init_class_kind(core::General_O);
+
+  Init_class_kind(core::Cons_O);
+  Init__fixed_field(core::Cons_O, 0, SMART_PTR_OFFSET, _Car);
+  Init__fixed_field(core::Cons_O, 1, SMART_PTR_OFFSET, _Cdr);
+
+  Init_class_kind(core::SimpleBaseString_O);
+  Init__variable_array0(core::SimpleBaseString_O, _Data._Data);
+  Init__variable_capacity(core::SimpleBaseString_O, value_type, _Data._MaybeSignedLength, _Data._MaybeSignedLength);
+  Init__variable_field(core::SimpleBaseString_O, gctools::ctype_unsigned_char, 0, "only", 0);
+
+  Init_class_kind(core::SimpleCharacterString_O);
+  Init__variable_array0(core::SimpleCharacterString_O, _Data._Data);
+  Init__variable_capacity(core::SimpleCharacterString_O, value_type, _Data._MaybeSignedLength, _Data._MaybeSignedLength);
+  Init__variable_field(core::SimpleCharacterString_O, gctools::ctype_unsigned_int, 0, "only", 0);
+
+  Init_class_kind(core::Function_O);
+
+  Init_class_kind(core::Symbol_O);
+  Init__fixed_field(core::Symbol_O, 0, SMART_PTR_OFFSET, _Name);
+  Init__fixed_field(core::Symbol_O, 1, SMART_PTR_OFFSET, _HomePackage);
+  Init__fixed_field(core::Symbol_O, 2, SMART_PTR_OFFSET, _Value);
+  Init__fixed_field(core::Symbol_O, 3, SMART_PTR_OFFSET, _Function);
+  Init__fixed_field(core::Symbol_O, 4, SMART_PTR_OFFSET, _SetfFunction);
+  Init__fixed_field(core::Symbol_O, 5, SMART_PTR_OFFSET, _PropertyList);
+
+  Init_class_kind(core::DestDynEnv_O);
+  Init__fixed_field(core::DestDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+
+  Init_class_kind(core::LexDynEnv_O);
+  Init__fixed_field(core::LexDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+  Init__fixed_field(core::LexDynEnv_O, 1, RAW_POINTER_OFFSET, frame);
+
+  Init_class_kind(core::BlockDynEnv_O);
+  Init__fixed_field(core::BlockDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+  Init__fixed_field(core::BlockDynEnv_O, 1, RAW_POINTER_OFFSET, frame);
+
+  Init_class_kind(core::TagbodyDynEnv_O);
+  Init__fixed_field(core::TagbodyDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+  Init__fixed_field(core::TagbodyDynEnv_O, 1, RAW_POINTER_OFFSET, frame);
+
+  Init_class_kind(core::CatchDynEnv_O);
+  Init__fixed_field(core::CatchDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+  Init__fixed_field(core::CatchDynEnv_O, 0, SMART_PTR_OFFSET, tag);
+
+  Init_class_kind(core::UnwindProtectDynEnv_O);
+  Init__fixed_field(core::UnwindProtectDynEnv_O, 0, RAW_POINTER_OFFSET, target);
+
+  Init_class_kind(core::BindingDynEnv_O);
+  Init__fixed_field(core::BindingDynEnv_O, 0, SMART_PTR_OFFSET, cell);
+  Init__fixed_field(core::BindingDynEnv_O, 0, SMART_PTR_OFFSET, old);
+
+  Init_class_kind(core::BytecodeModule_O);
+  Init__fixed_field(core::BytecodeModule_O, 0, SMART_PTR_OFFSET, _Literals);
+  Init__fixed_field(core::BytecodeModule_O, 1, SMART_PTR_OFFSET, _Bytecode);
+
+  Init_class_kind(core::SimpleCoreFun_O);
+  Init__fixed_field(core::SimpleCoreFun_O, 0, SMART_PTR_OFFSET, _TheSimpleFun);
+  Init__fixed_field(core::SimpleCoreFun_O, 1, SMART_PTR_OFFSET, _FunctionDescription);
+  Init__fixed_field(core::SimpleCoreFun_O, 2, SMART_PTR_OFFSET, _Code);
+  for (int iii = 0; iii < NUMBER_OF_ENTRY_POINTS; iii++) {
+    Init__fixed_field(core::SimpleCoreFun_O, 3 + iii, RAW_POINTER_OFFSET, _EntryPoints._EntryPoints[iii]);
+  }
+  Init__fixed_field(core::SimpleCoreFun_O, 3 + NUMBER_OF_ENTRY_POINTS, SMART_PTR_OFFSET, _localFun);
+
+  Init_class_kind(core::BytecodeSimpleFun_O);
+  Init__fixed_field(core::BytecodeSimpleFun_O, 0, SMART_PTR_OFFSET, _TheSimpleFun);
+  Init__fixed_field(core::BytecodeSimpleFun_O, 1, SMART_PTR_OFFSET, _FunctionDescription);
+  Init__fixed_field(core::BytecodeSimpleFun_O, 2, SMART_PTR_OFFSET, _Code);
+  Init__fixed_field(core::BytecodeSimpleFun_O, 3, RAW_POINTER_OFFSET, _EntryPoints._EntryPoints[0]);
+
+  Init_class_kind(core::FunctionDescription_O);
+  Init__fixed_field(core::FunctionDescription_O, 0, SMART_PTR_OFFSET, _functionName);
+  Init__fixed_field(core::FunctionDescription_O, 1, SMART_PTR_OFFSET, _sourcePathname);
+  Init__fixed_field(core::FunctionDescription_O, 2, SMART_PTR_OFFSET, _lambdaList);
+  Init__fixed_field(core::FunctionDescription_O, 3, SMART_PTR_OFFSET, _docstring);
+  Init__fixed_field(core::FunctionDescription_O, 4, SMART_PTR_OFFSET, _declares);
+  Init__fixed_field(core::FunctionDescription_O, 5, ctype_int, lineno);
+  Init__fixed_field(core::FunctionDescription_O, 6, ctype_int, column);
+  Init__fixed_field(core::FunctionDescription_O, 7, ctype_int, filepos);
+
+  Init_class_kind(core::FuncallableInstance_O);
+  Init__fixed_field(core::FuncallableInstance_O, 0, SMART_PTR_OFFSET, _TheSimpleFun);
+  Init__fixed_field(core::FuncallableInstance_O, 1, SMART_PTR_OFFSET, _Rack);
+  Init__fixed_field(core::FuncallableInstance_O, 2, SMART_PTR_OFFSET, _Class);
+  Init__fixed_field(core::FuncallableInstance_O, 3, SMART_PTR_OFFSET, _RealFunction);
+
+  Init_class_kind(core::Closure_O);
+  Init__fixed_field(core::Closure_O, 0, SMART_PTR_OFFSET, _TheSimpleFun);
+  Init__variable_array0(core::Closure_O, _Slots._Data);
+  Init__variable_capacity(core::Closure_O, value_type, _Slots._MaybeSignedLength, _Slots._MaybeSignedLength);
+  Init__variable_field(core::Closure_O, SMART_PTR_OFFSET, 0, "only", 0);
+
+  Init_templated_kind(core::WrappedPointer_O);
+  Init__fixed_field(core::WrappedPointer_O, 0, SMART_PTR_OFFSET, Class_);
+
+  Init_class_kind(core::Package_O);
+  Init__fixed_field(core::Package_O, 0, SMART_PTR_OFFSET, _InternalSymbols);
+  Init__fixed_field(core::Package_O, 1, SMART_PTR_OFFSET, _ExternalSymbols);
+  Init__fixed_field(core::Package_O, 2, SMART_PTR_OFFSET, _Shadowing);
+  Init__fixed_field(core::Package_O, 3, SMART_PTR_OFFSET, _Name);
+  Init__fixed_field(core::Package_O, 4, SMART_PTR_OFFSET, _Nicknames);
+  Init__fixed_field(core::Package_O, 5, SMART_PTR_OFFSET, _LocalNicknames);
+  Init__fixed_field(core::Package_O, 6, SMART_PTR_OFFSET, _Documentation);
+
+  Init_class_kind(core::Instance_O);
+  Init__fixed_field(core::Instance_O, 0, SMART_PTR_OFFSET, _Class);
+  Init__fixed_field(core::Instance_O, 1, SMART_PTR_OFFSET, _Rack);
+
+  Init_class_kind(core::Rack_O);
+  Init__fixed_field(core::Rack_O, 0, ctype_size_t, _ShiftedStamp);
+  Init__fixed_field(core::Rack_O, 1, SMART_PTR_OFFSET, _Sig);
+  Init__variable_array0(core::Rack_O, _Slots);
+  Init__variable_capacity(core::Rack_O, value_type, _Slots._Length, _Slots._Length);
+  Init__variable_field(core::Rack_O, gctools::SMART_PTR_OFFSET, 0, "only", 0);
+
+  Init_class_kind(core::Pathname_O);
+  Init__fixed_field(core::Pathname_O, 0, SMART_PTR_OFFSET, _Host);
+  Init__fixed_field(core::Pathname_O, 1, SMART_PTR_OFFSET, _Device);
+  Init__fixed_field(core::Pathname_O, 2, SMART_PTR_OFFSET, _Directory);
+  Init__fixed_field(core::Pathname_O, 3, SMART_PTR_OFFSET, _Name);
+  Init__fixed_field(core::Pathname_O, 4, SMART_PTR_OFFSET, _Type);
+  Init__fixed_field(core::Pathname_O, 5, SMART_PTR_OFFSET, _Version);
+
+  Init_class_kind(core::LogicalPathname_O);
+  Init__fixed_field(core::LogicalPathname_O, 0, SMART_PTR_OFFSET, _Host);
+  Init__fixed_field(core::LogicalPathname_O, 1, SMART_PTR_OFFSET, _Device);
+  Init__fixed_field(core::LogicalPathname_O, 2, SMART_PTR_OFFSET, _Directory);
+  Init__fixed_field(core::LogicalPathname_O, 3, SMART_PTR_OFFSET, _Name);
+  Init__fixed_field(core::LogicalPathname_O, 4, SMART_PTR_OFFSET, _Type);
+  Init__fixed_field(core::LogicalPathname_O, 5, SMART_PTR_OFFSET, _Version);
+
+  Init_class_kind(core::Vaslist_dummy_O);
+  Init_class_kind(core::Unused_dummy_O);
+  Init_class_kind(core::ClassHolder_O);
+  Init_class_kind(core::SymbolToEnumConverter_O);
+  Init_class_kind(llvmo::Attribute_O);
+  Init_class_kind(llvmo::AttributeSet_O);
+  Init_class_kind(core::ClassRepCreator_O);
+  Init_class_kind(core::DerivableCxxClassCreator_O);
+  Init_class_kind(core::FuncallableInstanceCreator_O);
+  Init_class_kind(clbind::DummyCreator_O);
+  Init_class_kind(core::InstanceCreator_O);
+  Init_class_kind(core::StandardClassCreator_O);
+  Init_class_kind(core::SingleDispatchGenericFunction_O);
+  Init_class_kind(core::ImmobileObject_O);
+  Init_class_kind(core::WeakPointer_O);
+  Init_class_kind(llvmo::DebugLoc_O);
+  Init_class_kind(core::Pointer_O);
+  Init_class_kind(clasp_ffi::ForeignData_O);
+  Init_class_kind(core::CxxObject_O);
+  Init_class_kind(llvmo::MDBuilder_O);
+  Init_class_kind(mp::ConditionVariable_O);
+  Init_class_kind(core::NativeVector_int_O);
+  Init_class_kind(llvmo::FunctionCallee_O);
+  Init_class_kind(llvmo::DINodeArray_O);
+  Init_class_kind(mp::Mutex_O);
+  Init_class_kind(mp::RecursiveMutex_O);
+  Init_class_kind(llvmo::DITypeRefArray_O);
+  Init_class_kind(mp::SharedMutex_O);
+  Init_class_kind(mp::Process_O);
+  Init_class_kind(core::SingleDispatchMethod_O);
+  Init_class_kind(core::Iterator_O);
+  Init_class_kind(core::DirectoryIterator_O);
+  Init_class_kind(core::RecursiveDirectoryIterator_O);
+  Init_class_kind(core::Array_O);
+  Init_class_kind(core::MDArray_O);
+  Init_class_kind(core::MDArray_int16_t_O);
+  Init_class_kind(core::MDArray_int8_t_O);
+  Init_class_kind(core::MDArray_int32_t_O);
+  Init_class_kind(core::MDArray_byte4_t_O);
+  Init_class_kind(core::MDArray_float_O);
+  Init_class_kind(core::MDArray_size_t_O);
+  Init_class_kind(core::MDArray_byte8_t_O);
+  Init_class_kind(core::MDArray_int64_t_O);
+  Init_class_kind(core::MDArray_byte32_t_O);
+  Init_class_kind(core::MDArray_byte2_t_O);
+  Init_class_kind(core::MDArray_int2_t_O);
+  Init_class_kind(core::MDArray_fixnum_O);
+  Init_class_kind(core::MDArrayBaseChar_O);
+  Init_class_kind(core::MDArray_byte64_t_O);
+  Init_class_kind(core::MDArrayCharacter_O);
+  Init_class_kind(core::MDArrayT_O);
+  Init_class_kind(core::MDArrayBit_O);
+  Init_class_kind(core::MDArray_byte16_t_O);
+  Init_class_kind(core::SimpleMDArray_O);
+  Init_class_kind(core::SimpleMDArray_int8_t_O);
+  Init_class_kind(core::SimpleMDArray_double_O);
+  Init_class_kind(core::SimpleMDArray_byte32_t_O);
+  Init_class_kind(core::SimpleMDArrayT_O);
+  Init_class_kind(core::SimpleMDArray_int2_t_O);
+  Init_class_kind(core::SimpleMDArray_byte4_t_O);
+  Init_class_kind(core::SimpleMDArray_int32_t_O);
+  Init_class_kind(core::SimpleMDArray_float_O);
+  Init_class_kind(core::SimpleMDArray_int16_t_O);
+  Init_class_kind(core::SimpleMDArray_size_t_O);
+  Init_class_kind(core::SimpleMDArray_int4_t_O);
+  Init_class_kind(core::SimpleMDArrayCharacter_O);
+  Init_class_kind(core::SimpleMDArray_byte2_t_O);
+  Init_class_kind(core::SimpleMDArray_fixnum_O);
+  Init_class_kind(core::SimpleMDArray_byte16_t_O);
+  Init_class_kind(core::SimpleMDArrayBaseChar_O);
+  Init_class_kind(core::SimpleMDArray_byte64_t_O);
+  Init_class_kind(core::SimpleMDArrayBit_O);
+  Init_class_kind(core::SimpleMDArray_byte8_t_O);
+  Init_class_kind(core::SimpleMDArray_int64_t_O);
+  Init_class_kind(core::MDArray_int4_t_O);
+  Init_class_kind(core::MDArray_double_O);
+  Init_class_kind(core::ComplexVector_O);
+  Init_class_kind(core::ComplexVector_double_O);
+  Init_class_kind(core::ComplexVector_int8_t_O);
+  Init_class_kind(core::ComplexVector_byte64_t_O);
+  Init_class_kind(core::ComplexVector_T_O);
+  Init_class_kind(core::ComplexVector_int2_t_O);
+  Init_class_kind(core::ComplexVector_int32_t_O);
+  Init_class_kind(core::ComplexVector_byte16_t_O);
+  Init_class_kind(core::ComplexVector_float_O);
+  Init_class_kind(core::ComplexVector_int16_t_O);
+  Init_class_kind(core::ComplexVector_int4_t_O);
+  Init_class_kind(core::ComplexVector_size_t_O);
+  Init_class_kind(core::ComplexVector_byte2_t_O);
+  Init_class_kind(core::ComplexVector_byte8_t_O);
+  Init_class_kind(core::ComplexVector_byte32_t_O);
+  Init_class_kind(core::BitVectorNs_O);
+  Init_class_kind(core::StrNs_O);
+  Init_class_kind(core::Str8Ns_O);
+  Init_class_kind(core::StrWNs_O);
+  Init_class_kind(core::ComplexVector_byte4_t_O);
+  Init_class_kind(core::ComplexVector_fixnum_O);
+  Init_class_kind(core::ComplexVector_int64_t_O);
+  Init_class_kind(core::AbstractSimpleVector_O);
+  Init_class_kind(core::SimpleString_O);
+  Init_class_kind(core::SimpleVector_int16_t_O);
+  Init_class_kind(core::SimpleVector_byte16_t_O);
+  Init_class_kind(core::SimpleBitVector_O);
+  Init_class_kind(core::SimpleVector_int4_t_O);
+  Init_class_kind(core::SimpleVector_byte32_t_O);
+  Init_class_kind(core::SimpleVector_size_t_O);
+  Init_class_kind(core::SimpleVector_double_O);
+  Init_class_kind(core::SimpleVector_byte64_t_O);
+  Init_class_kind(core::SimpleVector_int2_t_O);
+  Init_class_kind(core::SimpleVector_int64_t_O);
+  Init_class_kind(core::SimpleVector_fixnum_O);
+  Init_class_kind(core::SimpleVector_int8_t_O);
+  Init_class_kind(core::SimpleVector_float_O);
+  Init_class_kind(core::SimpleVector_O);
+  Init_class_kind(core::SimpleVector_byte8_t_O);
+  Init_class_kind(core::SimpleVector_byte2_t_O);
+  Init_class_kind(core::SimpleVector_int32_t_O);
+  Init_class_kind(core::SimpleVector_byte4_t_O);
+  Init_class_kind(core::Null_O);
+  Init_class_kind(core::Character_dummy_O);
+  Init_class_kind(llvmo::DataLayout_O);
+  Init_class_kind(core::LoadTimeValues_O);
+  Init_class_kind(core::SharpEqualWrapper_O);
+  Init_class_kind(llvmo::ClaspJIT_O);
+  Init_class_kind(core::Readtable_O);
+  Init_class_kind(core::Exposer_O);
+  Init_class_kind(core::CoreExposer_O);
+  Init_class_kind(asttooling::AsttoolingExposer_O);
+  Init_class_kind(llvmo::StructLayout_O);
+  Init_class_kind(clasp_ffi::ForeignTypeSpec_O);
+  Init_class_kind(core::DerivableCxxObject_O);
+  Init_class_kind(clbind::ClassRep_O);
+  Init_class_kind(core::SmallMap_O);
+  Init_class_kind(mpip::Mpi_O);
+  Init_class_kind(core::ExternalObject_O);
+  Init_class_kind(llvmo::ExecutionEngine_O);
+  Init_class_kind(llvmo::MCSubtargetInfo_O);
+  Init_class_kind(llvmo::TargetSubtargetInfo_O);
+  Init_class_kind(llvmo::Type_O);
+  Init_class_kind(llvmo::FunctionType_O);
+  Init_class_kind(llvmo::PointerType_O);
+  Init_class_kind(llvmo::ArrayType_O);
+  Init_class_kind(llvmo::VectorType_O);
+  Init_class_kind(llvmo::StructType_O);
+  Init_class_kind(llvmo::IntegerType_O);
+  Init_class_kind(llvmo::JITDylib_O);
+  Init_class_kind(llvmo::DIContext_O);
+  Init_class_kind(llvmo::IRBuilderBase_O);
+  Init_class_kind(llvmo::IRBuilder_O);
+  Init_class_kind(llvmo::APFloat_O);
+  Init_class_kind(llvmo::APInt_O);
+  Init_class_kind(llvmo::DIBuilder_O);
+  Init_class_kind(llvmo::SectionedAddress_O);
+  Init_class_kind(llvmo::EngineBuilder_O);
+  Init_class_kind(llvmo::Metadata_O);
+  Init_class_kind(llvmo::MDNode_O);
+  Init_class_kind(llvmo::DINode_O);
+  Init_class_kind(llvmo::DIVariable_O);
+  Init_class_kind(llvmo::DILocalVariable_O);
+  Init_class_kind(llvmo::DIScope_O);
+  Init_class_kind(llvmo::DIFile_O);
+  Init_class_kind(llvmo::DIType_O);
+  Init_class_kind(llvmo::DICompositeType_O);
+  Init_class_kind(llvmo::DIDerivedType_O);
+  Init_class_kind(llvmo::DIBasicType_O);
+  Init_class_kind(llvmo::DISubroutineType_O);
+  Init_class_kind(llvmo::DILocalScope_O);
+  Init_class_kind(llvmo::DISubprogram_O);
+  Init_class_kind(llvmo::DILexicalBlockBase_O);
+  Init_class_kind(llvmo::DILexicalBlock_O);
+  Init_class_kind(llvmo::DICompileUnit_O);
+  Init_class_kind(llvmo::DIExpression_O);
+  Init_class_kind(llvmo::DILocation_O);
+  Init_class_kind(llvmo::ValueAsMetadata_O);
+  Init_class_kind(llvmo::MDString_O);
+  Init_class_kind(llvmo::Value_O);
+  Init_class_kind(llvmo::Argument_O);
+  Init_class_kind(llvmo::BasicBlock_O);
+  Init_class_kind(llvmo::MetadataAsValue_O);
+  Init_class_kind(llvmo::User_O);
+  Init_class_kind(llvmo::Instruction_O);
+  Init_class_kind(llvmo::UnaryInstruction_O);
+  Init_class_kind(llvmo::VAArgInst_O);
+  Init_class_kind(llvmo::LoadInst_O);
+  Init_class_kind(llvmo::AllocaInst_O);
+  Init_class_kind(llvmo::SwitchInst_O);
+  Init_class_kind(llvmo::AtomicRMWInst_O);
+  Init_class_kind(llvmo::LandingPadInst_O);
+  Init_class_kind(llvmo::StoreInst_O);
+  Init_class_kind(llvmo::UnreachableInst_O);
+  Init_class_kind(llvmo::ReturnInst_O);
+  Init_class_kind(llvmo::ResumeInst_O);
+  Init_class_kind(llvmo::AtomicCmpXchgInst_O);
+  Init_class_kind(llvmo::FenceInst_O);
+  Init_class_kind(llvmo::CallBase_O);
+  Init_class_kind(llvmo::CallInst_O);
+  Init_class_kind(llvmo::InvokeInst_O);
+  Init_class_kind(llvmo::PHINode_O);
+  Init_class_kind(llvmo::IndirectBrInst_O);
+  Init_class_kind(llvmo::BranchInst_O);
+  Init_class_kind(llvmo::Constant_O);
+  Init_class_kind(llvmo::GlobalValue_O);
+  Init_class_kind(llvmo::Function_O);
+  Init_class_kind(llvmo::GlobalVariable_O);
+  Init_class_kind(llvmo::BlockAddress_O);
+  Init_class_kind(llvmo::ConstantDataSequential_O);
+  Init_class_kind(llvmo::ConstantDataArray_O);
+  Init_class_kind(llvmo::ConstantStruct_O);
+  Init_class_kind(llvmo::ConstantInt_O);
+  Init_class_kind(llvmo::ConstantFP_O);
+  Init_class_kind(llvmo::ConstantExpr_O);
+  Init_class_kind(llvmo::ConstantPointerNull_O);
+  Init_class_kind(llvmo::UndefValue_O);
+  Init_class_kind(llvmo::ConstantArray_O);
+  Init_class_kind(llvmo::TargetMachine_O);
+  Init_class_kind(llvmo::LLVMTargetMachine_O);
+  Init_class_kind(llvmo::ThreadSafeContext_O);
+  Init_class_kind(llvmo::NamedMDNode_O);
+  Init_class_kind(llvmo::Triple_O);
+  Init_class_kind(llvmo::DWARFContext_O);
+  Init_class_kind(llvmo::TargetOptions_O);
+  Init_class_kind(llvmo::ObjectFile_O);
+  Init_class_kind(llvmo::LLVMContext_O);
+  Init_class_kind(llvmo::Module_O);
+  Init_class_kind(llvmo::Target_O);
+  Init_class_kind(llvmo::Linker_O);
+  Init_class_kind(core::SmallMultimap_O);
+  Init_class_kind(core::Sigset_O);
+  Init_class_kind(core::RandomState_O);
+  Init_class_kind(core::HashTableBase_O);
+  Init_class_kind(core::WeakKeyHashTable_O);
+  Init_class_kind(core::HashTable_O);
+  Init_class_kind(core::HashTableEqualp_O);
+  Init_class_kind(core::HashTableEq_O);
+  Init_class_kind(core::HashTableEql_O);
+  Init_class_kind(core::HashTableEqual_O);
+  Init_class_kind(llvmo::InsertPoint_O);
+  Init_class_kind(core::Scope_O);
+  Init_class_kind(core::FileScope_O);
+  Init_class_kind(core::Path_O);
+  Init_class_kind(core::Number_O);
+  Init_class_kind(core::Real_O);
+  Init_class_kind(core::Rational_O);
+  Init_class_kind(core::Ratio_O);
+  Init_class_kind(core::Integer_O);
+  Init_class_kind(core::Bignum_O);
+  Init_class_kind(core::Fixnum_dummy_O);
+  Init_class_kind(core::Float_O);
+  Init_class_kind(core::DoubleFloat_O);
+  Init_class_kind(core::SingleFloat_dummy_O);
+  Init_class_kind(core::LongFloat_O);
+  Init_class_kind(core::ShortFloat_O);
+  Init_class_kind(core::Complex_O);
+  Init_class_kind(core::Stream_O);
+  Init_class_kind(core::AnsiStream_O);
+  Init_class_kind(core::TwoWayStream_O);
+  Init_class_kind(core::SynonymStream_O);
+  Init_class_kind(core::ConcatenatedStream_O);
+  Init_class_kind(core::FileStream_O);
+  Init_class_kind(core::PosixFileStream_O);
+  Init_class_kind(core::CFileStream_O);
+  Init_class_kind(core::BroadcastStream_O);
+  Init_class_kind(core::StringStream_O);
+  Init_class_kind(core::StringOutputStream_O);
+  Init_class_kind(core::StringInputStream_O);
+  Init_class_kind(core::EchoStream_O);
+  Init_class_kind(core::FileStatus_O);
+  Init_class_kind(core::SourcePosInfo_O);
+  Init_class_kind(core::DirectoryEntry_O);
+  Init_class_kind(core::LightUserData_O);
+  Init_class_kind(core::UserData_O);
+  Init_class_kind(core::Record_O);
+  Init_class_kind(clbind::ClassRegistry_O);
+  Init_class_kind(core::Cons_O);
+
+  Init_templated_kind(core::WrappedPointer_O);
+  Init_templated_kind(core::Creator_O);
+  Init_templated_kind(clbind::ConstructorCreator_O);
+};
+
+void initialize_enums(){
+// include INIT_CLASSES_INC_H despite USE_PRECISE_GC
+#ifndef SCRAPING
+#define ALL_ENUMS
+#include <generated/enum_inc.h>
+#undef ALL_ENUMS
+#endif
+};
+
+extern void initialize_allocate_metaclasses(core::BootStrapCoreSymbolMap& bootStrapCoreSymbolMap);
+
+void initialize_clasp() {
+  // The bootStrapCoreSymbolMap keeps track of packages and symbols while they
+  // are half-way initialized.
+  MPS_LOG("initialize_clasp");
+  core::BootStrapCoreSymbolMap bootStrapCoreSymbolMap;
+  setup_bootstrap_packages(&bootStrapCoreSymbolMap);
+
+  MPS_LOG("initialize_clasp allocate_symbols");
+  allocate_symbols(&bootStrapCoreSymbolMap);
+
+  MPS_LOG("initialize_clasp set_static_class_symbols");
+  set_static_class_symbols(&bootStrapCoreSymbolMap);
+
+  // Initialize metaclasses
+  initialize_allocate_metaclasses(bootStrapCoreSymbolMap);
+
+  initialize_enums();
+
+  // Moved to lisp.cc
+  //  initialize_functions();
+  // initialize methods???
+  //  initialize_source_info();
+};
+
+#endif // #ifndef SCRAPING at top

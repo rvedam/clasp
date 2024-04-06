@@ -1,3 +1,4 @@
+#pragma once
 /*
     File: random.h
 */
@@ -24,53 +25,76 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef _core_random_H_
-#define _core_random_H_
+
+#include <random>
 
 #include <clasp/core/clasp_gmpxx.h>
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/numbers.h>
+
+template <> struct gctools::GCInfo<core::RandomState_O> {
+  static bool constexpr NeedsInitialization = false;
+  static bool constexpr NeedsFinalization = false;
+  static GCInfo_policy constexpr Policy = atomic;
+};
 
 namespace core {
 
 SMART(RandomState);
 
-class RandomState_O : public T_O {
-  LISP_BASE1(T_O);
-  LISP_CLASS(core, ClPkg, RandomState_O, "random-state");
-  //	DECLARE_INIT();
+class RandomState_O : public General_O {
+  LISP_CLASS(core, ClPkg, RandomState_O, "random-state", General_O);
   //    DECLARE_ARCHIVE();
 public: // Simple default ctor/dtor
-  boost::mt11213b _Producer;
+  typedef std::mt19937 Generator;
+  dont_expose<Generator> _Producer;
 
 public: // ctor/dtor for classes with shared virtual base
-  explicit RandomState_O() {
-    clock_t currentTime;
-    int tt;
+  explicit RandomState_O(bool random = false) {
+    if (random) {
+      clock_t currentTime;
 #ifdef darwin
-    currentTime = mach_absolute_time();
+      currentTime = mach_absolute_time();
 #else
-    currentTime = clock();
+      currentTime = clock();
 #endif
-    tt = currentTime % 32768;
-    this->_Producer.seed(static_cast<uint>(tt));
+      uint tt = currentTime;
+      tt = currentTime % 32768;
+      Generator temp_gen(static_cast<uint>(tt));
+      this->_Producer._value = temp_gen; // this->_Producer.seed(tt);
+    } else {
+      Generator temp_gen(0);
+      this->_Producer._value = temp_gen; // this->_Producer.seed(0);
+    }
   };
-  explicit RandomState_O(const RandomState_O &state) {
-    this->_Producer = state._Producer;
-  };
+  explicit RandomState_O(const RandomState_O& state) { this->_Producer._value = state._Producer._value; };
   virtual ~RandomState_O() {}
+
+  CL_DEFMETHOD std::string random_state_get() const {
+    stringstream ss;
+    ss << this->_Producer._value;
+    return ss.str();
+  }
+  CL_DEFMETHOD RandomState_sp random_state_set(const std::string& s) {
+    stringstream ss(s);
+    ss >> this->_Producer._value;
+    return this->asSmartPtr();
+  }
 
 public: // Functions here
   static RandomState_sp make(T_sp state);
   static RandomState_sp create(RandomState_sp other) {
-    GC_ALLOCATE_VARIADIC(RandomState_O, b, *other);
+    auto b = gctools::GC<RandomState_O>::allocate(*other);
     return b;
   };
+  static RandomState_sp create_random() {
+    auto b = gctools::GC<RandomState_O>::allocate(true);
+    return b;
+  }
+
+  virtual void __write__(T_sp strm) const;
+  virtual void __writeReadable__(T_sp strm) const;
 
 }; // RandomState class
 
-}; // core namespace
-TRANSLATE(core::RandomState_O);
-
-#endif /* _random_H_ */
+}; // namespace core

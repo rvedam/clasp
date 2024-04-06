@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: array.fwd.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -27,12 +28,48 @@ THE SOFTWARE.
 /* @(#)array.fwd.h
  */
 
-#ifndef _core_Array_fwd_H
-#define _core_Array_fwd_H
+#include <clasp/core/coretypes.h> // FORWARD
 
 namespace core {
-FORWARD(Array);
+FORWARD(AbstractSimpleVector);
+FORWARD(SimpleString);
+FORWARD(SimpleBaseString);
+FORWARD(SimpleCharacterString);
+FORWARD(StrNs);
+FORWARD(Str8Ns);
+FORWARD(StrWNs);
+FORWARD(MDArrayT);
+FORWARD(SimpleMDArrayT);
+FORWARD(ComplexVector_T);
+FORWARD(MDArrayBit);
+FORWARD(SimpleMDArrayBit);
+FORWARD(MDArrayBaseChar);
+FORWARD(SimpleMDArrayBaseChar);
+FORWARD(MDArrayCharacter);
+FORWARD(SimpleMDArrayCharacter);
+//
+FORWARD(SimpleVector_double);
+FORWARD(MDArray_double);
+FORWARD(SimpleMDArray_double);
+FORWARD(ComplexVector_double);
+//
+FORWARD(SimpleVector_size_t);
+FORWARD(MDArray_size_t);
+FORWARD(SimpleMDArray_size_t);
+}; // namespace core
 
-}; /* core */
+namespace core {
+// ------------------------------------------------------------
+//  Convert 8-bit strings
 
-#endif /* _core_Array_fwd_H */
+/*! Access functions to avoid having to include the entire class */
+string string_get_std_string(T_sp str);
+string string_get_std_string(String_sp str);
+
+/*! Create a SimpleBaseString_O object */
+SimpleBaseString_sp str_create(const string& val);
+
+/*! Create a SimpleBaseString_O object from a const char* */
+SimpleBaseString_sp str_create(const char* val);
+
+}; // namespace core

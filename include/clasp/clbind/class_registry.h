@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: class_registry.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -46,9 +48,6 @@ THE SOFTWARE.
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 // OR OTHER DEALINGS IN THE SOFTWARE.
 
-#ifndef CLBIND_CLASS_REGISTRY_HPP_INCLUDED
-#define CLBIND_CLASS_REGISTRY_HPP_INCLUDED
-
 #include <map>
 
 #include <clasp/clbind/config.h>
@@ -61,10 +60,9 @@ namespace clbind {
 FORWARD(ClassRep);
 
 FORWARD(ClassRegistry);
-class ClassRegistry_O : public core::T_O {
-  LISP_BASE1(core::T_O);
-  LISP_CLASS(clbind, ClbindPkg, ClassRegistry_O, "ClassRegistry");
-  void initialize();
+class ClassRegistry_O : public core::General_O {
+  LISP_CLASS(clbind, ClbindPkg, ClassRegistry_O, "ClassRegistry", core::General_O);
+  void initialize() override;
 
 public:
   ClassRegistry_O(){};
@@ -81,15 +79,15 @@ public:
         int cl_class() const { return m_cl_class_metatable; }
         int cl_function() const { return m_cl_function_metatable; }
 #endif
-  void add_class(type_id const &info, ClassRep_sp crep);
+  void add_class(type_id const& info, ClassRep_sp crep);
 
-  ClassRep_sp find_class(type_id const &info) const;
+  ClassRep_sp find_class(type_id const& info) const;
 
-GCPRIVATE:
+  GCPRIVATE :
 
-  /*! Index on the type_id.id converted to a core::Pointer and use EQL equality */
-  core::HashTableEql_sp m_classes;
-//        std::map<type_id, ClassRep_sp> m_classes;
+      /*! Index on the type_id.id converted to a core::Pointer and use EQL equality */
+      core::HashTableEql_sp m_classes;
+  //        std::map<type_id, ClassRep_sp> m_classes;
 
 #if 0
         // this is a cl reference that points to the cl table
@@ -110,6 +108,4 @@ GCPRIVATE:
         int m_cl_function_metatable;
 #endif
 };
-}
-
-#endif // CLBIND_CLASS_REGISTRY_HPP_INCLUDED
+} // namespace clbind

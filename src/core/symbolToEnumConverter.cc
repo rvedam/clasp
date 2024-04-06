@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,15 +24,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
 #include <clasp/core/foundation.h>
 #include <clasp/core/lisp.h>
 #include <clasp/core/symbolToEnumConverter.h>
 #include <clasp/core/hashTableEq.h>
-#include <clasp/core/environment.h>
 #include <clasp/core/hashTableEql.h>
-#include <clasp/core/binder.h>
 #include <clasp/core/lisp.h>
 
 // last include is wrappers.h
@@ -40,25 +38,20 @@ THE SOFTWARE.
 
 namespace core {
 
-void SymbolToEnumConverter_O::exposeCando(Lisp_sp e) {
-  class_<SymbolToEnumConverter_O>()
-      .def("enumIndexForSymbol", &SymbolToEnumConverter_O::enumIndexForSymbol);
-}
-void SymbolToEnumConverter_O::exposePython(Lisp_sp lisp) {
-  _G();
-#ifdef USEBOOSTPYTHON //[
-  PYTHON_CLASS(CorePkg, SymbolToEnumConverter, "", "", _lisp);
-#endif //]
+List_sp SymbolToEnumConverter_O::enumSymbolsAsList() const {
+  List_sp symbols = nil<T_O>();
+  this->_SymbolToEnum->maphash([&symbols](T_sp key, T_sp val) { symbols = Cons_O::create(key, symbols); });
+  return symbols;
 }
 
-SymbolToEnumConverter_sp SymbolToEnumConverter_O::create(const string &whatDoesEnumRepresent) {
-  _G();
+SymbolToEnumConverter_sp SymbolToEnumConverter_O::create(const string& whatDoesEnumRepresent) {
   SymbolToEnumConverter_sp c = SymbolToEnumConverter_O::create();
   c->setWhatTheEnumsRepresent(whatDoesEnumRepresent);
   return c;
 }
 
-SymbolToEnumConverter_sp SymbolToEnumConverter_O::create(const string &whatDoesEnumRepresent, string const &packageName, NullTerminatedEnumAssociation assoc[], bool exportSymbols) {
+SymbolToEnumConverter_sp SymbolToEnumConverter_O::create(const string& whatDoesEnumRepresent, string const& packageName,
+                                                         NullTerminatedEnumAssociation assoc[], bool exportSymbols) {
   SymbolToEnumConverter_sp c = SymbolToEnumConverter_O::create(whatDoesEnumRepresent);
   for (int i = 0; assoc[i]._Key != ""; ++i) {
     Symbol_sp sym = _lisp->internWithPackageName(packageName, assoc[i]._Key);
@@ -69,13 +62,11 @@ SymbolToEnumConverter_sp SymbolToEnumConverter_O::create(const string &whatDoesE
   return c;
 }
 
-void SymbolToEnumConverter_O::setWhatTheEnumsRepresent(const string &what) {
-  _OF();
-  this->_WhatTheEnumsRepresent = what;
+void SymbolToEnumConverter_O::setWhatTheEnumsRepresent(const string& what) {
+  this->_WhatTheEnumsRepresent = SimpleBaseString_O::make(what);
 }
 
-Symbol_sp SymbolToEnumConverter_O::addSymbolEnumPair(Symbol_sp asym, Symbol_sp const &archiveSym, int enumIndex) {
-  _OF();
+Symbol_sp SymbolToEnumConverter_O::addSymbolEnumPair(Symbol_sp asym, Symbol_sp const& archiveSym, int enumIndex) {
   Symbol_sp sym = asym;
   if (sym.nilp()) {
     sym = archiveSym;
@@ -88,77 +79,70 @@ Symbol_sp SymbolToEnumConverter_O::addSymbolEnumPair(Symbol_sp asym, Symbol_sp c
   return sym;
 }
 
-int SymbolToEnumConverter_O::enumIndexForSymbol(Symbol_sp sym) {
-  _OF();
-  if (!this->_SymbolToEnum->contains(sym)) {
-    SIMPLE_ERROR(BF("Could not find %s in symbol-to-enum-converter: %s") % _rep_(sym) % _rep_(this->sharedThis<SymbolToEnumConverter_O>()));
-  }
-  return unbox_fixnum(gc::As<Fixnum_sp>(this->_SymbolToEnum->gethash(sym)));
+CL_LISPIFY_NAME("enumIndexForSymbol");
+CL_DEFMETHOD int SymbolToEnumConverter_O::enumIndexForSymbol(T_sp obj) {
+  T_mv match_mv = this->_SymbolToEnum->gethash(obj);
+  MultipleValues& mv = core::lisp_multipleValues();
+  if (mv.second(match_mv.number_of_values()).nilp())
+    TYPE_ERROR(obj, Cons_O::create(cl::_sym_member, this->enumSymbolsAsList()));
+  return unbox_fixnum(match_mv);
 }
 
 Symbol_sp SymbolToEnumConverter_O::symbolForEnumIndex(int index) {
-  _OF();
   Fixnum_sp indexKey = make_fixnum(index);
-  ASSERTF(this->_EnumToSymbol->contains(indexKey), BF("Could not find symbol for EnumIndex(%d) in SymbolToEnumConverter(%s)") % index % this->_WhatTheEnumsRepresent.c_str());
+  ASSERTF(this->_EnumToSymbol->contains(indexKey), "Could not find symbol for EnumIndex({}) in SymbolToEnumConverter({})", index,
+          this->_WhatTheEnumsRepresent->get_std_string());
   return gc::As<Symbol_sp>(this->_EnumToSymbol->gethash(indexKey));
 }
 
 #if 0
 string SymbolToEnumConverter_O::symbolStringForEnumIndex(int index)
-{_OF();
+{
     ASSERT(this->_EnumToArchiveString.count(index)>0);
     return this->_EnumToArchiveString[index];
 }
 #endif
 
 void SymbolToEnumConverter_O::throwIfUnrecognizedEnumIndex(int ei) {
-  _OF();
   if (!this->recognizesEnumIndex(ei)) {
-    stringstream ss;
-    ss << (BF("I do not recognize the enum value(%d)") % ei).str() << std::endl;
-    ss << "Legal enum values/symbols are: " << std::endl;
-    ss << this->legalEnumValuesAndSymbols() << std::endl;
-    SIMPLE_ERROR(BF(ss.str()));
+    SIMPLE_ERROR("I do not recognize the enum value({})\nLegal enum values/symbols are: {}", ei, this->legalEnumValuesAndSymbols());
   }
 }
 
 string SymbolToEnumConverter_O::legalEnumValuesAndSymbols() {
-  _OF();
+
   stringstream ss;
-  this->_EnumToArchiveSymbol->mapHash([&ss](T_sp key, T_sp val) {
-            ss << "(" << _rep_(key) << "/" << _rep_(val) << ") ";
-  });
+  this->_EnumToArchiveSymbol->mapHash([&ss](T_sp key, T_sp val) { ss << "(" << _rep_(key) << "/" << _rep_(val) << ") "; });
   return ss.str();
 }
 
-#if 0
-bool SymbolToEnumConverter_O::recognizesSymbolString(const string& enumStr)
-{_OF();
-    return this->_ArchiveStringToEnum.count(enumStr)>0;
-}
-#endif
-
 bool SymbolToEnumConverter_O::recognizesEnumIndex(int ei) {
-  _OF();
+
   Fixnum_sp eif = make_fixnum(ei);
   return this->_EnumToSymbol->contains(eif);
 }
 
-bool SymbolToEnumConverter_O::recognizesSymbol(Symbol_sp sym) {
-  _OF();
-  return this->_SymbolToEnum->contains(sym);
-}
+bool SymbolToEnumConverter_O::recognizesSymbol(Symbol_sp sym) { return this->_SymbolToEnum->contains(sym); }
 
 string SymbolToEnumConverter_O::__repr__() const {
-  _G();
   stringstream ss;
-  ss << "#<" << this->_instanceClass()->classNameAsString() << " ";
-  ss << " :info " << this->_WhatTheEnumsRepresent.c_str() << " ";
-  this->_EnumToSymbol->mapHash([&ss](T_sp k, T_sp v) {
-                ss << "#<entry " << _rep_(k) << " " <<_rep_(v) << "> ";
-  });
+  ss << "#<" << this->_instanceClass()->_classNameAsString() << " ";
+  ss << " :info " << this->_WhatTheEnumsRepresent->get_std_string() << " ";
+  this->_EnumToSymbol->mapHash([&ss](T_sp k, T_sp v) { ss << "#<entry " << _rep_(k) << " " << _rep_(v) << "> "; });
   ss << " > ";
   return ss.str();
+}
+
+CL_LAMBDA("converter symbols");
+DOCGROUP(clasp);
+CL_DEFUN Fixnum core__enum_logical_or(SymbolToEnumConverter_sp converter, List_sp symbols) {
+  Fixnum flags = 0;
+  for (auto cur : symbols) {
+    Symbol_sp sym = gctools::As<Symbol_sp>(oCar(cur));
+    Fixnum one_enum = unbox_fixnum(gc::As<Fixnum_sp>(converter->_SymbolToEnum->gethash(sym)));
+    flags |= one_enum;
+  }
+  return flags;
 }
 
 void SymbolToEnumConverter_O::initialize() {
@@ -176,5 +160,4 @@ void	SymbolToEnumConverter_O::archiveBase(ArchiveP node)
 }
 #endif
 
-EXPOSE_CLASS(core, SymbolToEnumConverter_O);
-};
+}; // namespace core

@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: gcvector.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,149 +26,67 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef gc_gcvector_H
-#define gc_gcvector_H
-
+namespace core {
+bool maybe_demangle(const std::string& fnName, std::string& output);
+};
 namespace gctools {
 
-template <class T>
-class GCVector_moveable : public GCContainer {
+template <class T> class GCVector_moveable : public GCContainer {
 public:
-  template <class U, typename Allocator>
-  friend class GCVector;
+  template <class U, typename Allocator> friend class GCVector;
   typedef GCVector_moveable<T> container_type;
   typedef T value_type;
-  typedef value_type &reference;
+  typedef value_type container_value_type;
+  typedef value_type& reference;
 
   GCVector_moveable(size_t num, size_t e = 0) : _Capacity(num), _End(e){};
   size_t _Capacity; // Index one beyond the total number of elements allocated
   size_t _End;
   T _Data[0]; // Store _Capacity numbers of T structs/classes starting here
 
-  template <typename Uty>
-  struct GCVector_moveable_iterator {
-    typedef GCVector_moveable_iterator<Uty> Iterator;
-    typedef Uty value_type;
-    mutable Uty *_TaggedCurP;
-    GCVector_moveable_iterator() : _TaggedCurP(NULL){};
-    GCVector_moveable_iterator(tagged_pointer<GCVector_moveable<T>> vec, size_t index) : _TaggedCurP(tag_general<Uty *>(&(vec->_Data[index]))){};
-    GCVector_moveable_iterator(GCVector_moveable<T> *vec, size_t index) : _TaggedCurP(tag_general<Uty *>(&(vec->_Data[index]))){};
-    const Iterator &operator=(const Iterator &other) const {
-      if (&other == this)
-        return *this;
-      this->_TaggedCurP = other._TaggedCurP;
-      return *this;
-    }
-    Uty *operator->() { return (untag_general<Uty *>(this->_TaggedCurP)); };
-    Uty &operator*() { return *(untag_general<Uty *>(this->_TaggedCurP)); };
-    Uty const *operator->() const { return (untag_general<Uty *>(this->_TaggedCurP)); };
-    Uty const &operator*() const { return *(untag_general<Uty *>(this->_TaggedCurP)); };
-    size_t operator-(const Iterator &other) const {
-      return (this->_TaggedCurP - other._TaggedCurP);
-    }
-    Iterator operator+(size_t num) const {
-      GCVector_moveable_iterator<Uty> clone(*this);
-      clone._TaggedCurP += num;
-      return clone;
-    }
-    Iterator operator-(size_t num) const {
-      GCVector_moveable_iterator<Uty> clone(*this);
-      clone._TaggedCurP -= num;
-      return clone;
-    }
-    bool operator==(const GCVector_moveable_iterator<Uty> &other) const {
-      return this->_TaggedCurP == other._TaggedCurP;
-    }
-    bool operator>(const GCVector_moveable_iterator<Uty> &other) const {
-      return this->_TaggedCurP > other._TaggedCurP;
-    }
-    bool operator>=(const GCVector_moveable_iterator<Uty> &other) const {
-      return this->_TaggedCurP >= other._TaggedCurP;
-    }
-    bool operator<(const GCVector_moveable_iterator<Uty> &other) const {
-      return this->_TaggedCurP < other._TaggedCurP;
-    }
-    bool operator<=(const GCVector_moveable_iterator<Uty> &other) const {
-      return this->_TaggedCurP <= other._TaggedCurP;
-    }
-    bool operator!=(const GCVector_moveable_iterator<Uty> &other) const {
-      return !(*this == other);
-    }
-    const GCVector_moveable_iterator<Uty> &operator++() const {
-      ++this->_TaggedCurP;
-      return *this;
-    }
-    GCVector_moveable_iterator<Uty> operator++(int) const {
-      GCVector_moveable_iterator<Uty> clone(*this);
-      ++this->_TaggedCurP;
-      return clone;
-    }
-    GCVector_moveable_iterator<Uty> &operator--() {
-      --this->_TaggedCurP;
-      return *this;
-    }
-    const GCVector_moveable_iterator<Uty> &operator--() const {
-      --this->_TaggedCurP;
-      return *this;
-    }
-    GCVector_moveable_iterator<Uty> operator--(int) const {
-      GCVector_moveable_iterator<Uty> clone(*this);
-      --this->_TaggedCurP;
-      return clone;
-    }
-  };
-
 public:
-  typedef GCVector_moveable_iterator<T> iterator;
-  typedef GCVector_moveable_iterator<T> const const_iterator;
+  typedef T* iterator;
+  typedef T const* const_iterator;
 
 private:
-  GCVector_moveable<T>(const GCVector_moveable<T> &that);        // disable copy ctor
-  GCVector_moveable<T> &operator=(const GCVector_moveable<T> &); // disable assignment
+  GCVector_moveable<T>(const GCVector_moveable<T>& that);       // disable copy ctor
+  GCVector_moveable<T>& operator=(const GCVector_moveable<T>&); // disable assignment
 
 public:
-  value_type *data() { return &this->_Data[0]; };
+  value_type* data() { return &this->_Data[0]; };
   size_t size() { return this->_End; };
   inline void unsafe_set_end(size_t e) { this->_End = e; }
   size_t capacity() const { return this->_Capacity; };
-  inline value_type &operator[](size_t i) { return this->_Data[i]; };
-  const value_type &operator[](size_t i) const { return this->_Data[i]; };
-  iterator begin() { return iterator(this, 0); };
-  iterator end() { return iterator(this, this->_End); };
-  const_iterator begin() const { return iterator(this, 0); };
-  const_iterator end() const { return iterator(this, this->_End); };
+  inline value_type& operator[](size_t i) { return this->_Data[i]; };
+  const value_type& operator[](size_t i) const { return this->_Data[i]; };
+  iterator begin() { return &this->_Data[0]; };
+  iterator end() { return &this->_Data[this->size()]; };
+  const_iterator begin() const { return &this->_Data[0]; };
+  const_iterator end() const { return &this->_Data[this->size()]; };
 };
-};
+}; // namespace gctools
 
-#if 0
-namespace std {
-  template <typename T>
-    struct iterator_traits {
-      typedef typename T::value_type value_type;
-  };
-};
-#endif
 namespace gctools {
 
-template <class T, typename Allocator>
-class GCVector {
-#ifdef USE_MPS
-//        friend GC_RESULT (::obj_scan)(mps_ss_t ss, mps_addr_t base, mps_addr_t limit);
-#endif
+template <class T, typename Allocator> class GCVector {
 public:
   typedef Allocator allocator_type;
   typedef T value_type;
-  typedef T &reference;
+  typedef T& reference;
   typedef GCVector<T, Allocator> my_type;
   typedef GCVector_moveable<T> impl_type; // implementation type
-  typedef GCVector_moveable<T> *pointer_to_moveable;
+  typedef GCVector_moveable<T>* pointer_to_moveable;
   typedef gctools::tagged_pointer<GCVector_moveable<T>> tagged_pointer_to_moveable;
   static const size_t GCVectorPad = 8;
   constexpr static const float GCVectorGrow = 2.0;
   constexpr static const float GCVectorShrink = 0.5;
-  typedef T *_pointer_type;
+  typedef T* _pointer_type;
   typedef typename impl_type::iterator iterator;
   typedef typename impl_type::const_iterator const_iterator;
+  typedef T* pointer;
+  typedef const T* const_pointer;
+  typedef std::size_t size_type;
+  typedef std::ptrdiff_t difference_type;
 
 public:
   // Only this instance variable is allowed
@@ -177,16 +97,15 @@ public:
 
 public:
   // Copy Ctor
-  GCVector<T, Allocator>(const GCVector<T, Allocator> &that) // : GCContainer(GCInfo<value_type>::Kind)
-  {
+  GCVector<T, Allocator>(const GCVector<T, Allocator>& that) {
     if (that._Contents) {
       allocator_type alloc;
       tagged_pointer_to_moveable implAddress = alloc.allocate(that._Contents->_Capacity);
       implAddress->_End = 0;
       this->_Contents = implAddress;
       new (&*implAddress) GCVector_moveable<T>(that._Contents->_Capacity);
-      for (iterator that_it(that.begin()), this_it(this->begin()); that_it != that.end(); ++that_it, ++this_it) {
-        alloc.construct(&*this_it, *that_it);
+      for (const_iterator that_it(that.begin()), this_it(this->begin()); that_it != that.end(); ++that_it, ++this_it) {
+        alloc.construct(this_it, *that_it);
       }
       this->_Contents->_End = that._Contents->_End;
     } else {
@@ -196,7 +115,7 @@ public:
 
 public:
   // Assignment operator must destroy the existing contents
-  GCVector<T, Allocator> &operator=(const GCVector<T, Allocator> &that) {
+  GCVector<T, Allocator>& operator=(const GCVector<T, Allocator>& that) {
     if (this != &that) {
       if (this->_Contents) {
         Allocator alloc;
@@ -209,7 +128,7 @@ public:
         tagged_pointer_to_moveable implAddress = alloc.allocate(that._Contents->_Capacity);
         new (&*implAddress) GCVector_moveable<T>(that._Contents->_Capacity);
         for (size_t i(0); i < that._Contents->_End; ++i) {
-          T *p = &((*implAddress)[i]);
+          T* p = &((*implAddress)[i]);
           alloc.construct(p, that._Contents->_Data[i]);
         }
         implAddress->_End = that._Contents->_End;
@@ -220,7 +139,7 @@ public:
   }
 
 public:
-  void swap(my_type &that) {
+  void swap(my_type& that) {
     tagged_pointer_to_moveable op = that._Contents;
     that._Contents = this->_Contents;
     this->_Contents = op;
@@ -229,15 +148,17 @@ public:
   pointer_to_moveable contents() const { return this->_Contents; };
 
 private:
-  T &errorEmpty() {
-    THROW_HARD_ERROR(BF("GCVector had no contents"));
-  };
-  const T &errorEmpty() const {
-    THROW_HARD_ERROR(BF("GCVector had no contents"));
-  };
+  T& errorEmpty() { throw_hard_error("GCVector had no contents"); };
+  const T& errorEmpty() const { throw_hard_error("GCVector had no contents"); };
 
 public:
-  GCVector() : _Contents(){};
+  GCVector(bool dummy)
+      : _Contents(){
+            // Don't GC allocate using this ctor
+        };
+  GCVector() : _Contents() {
+    this->reserve(8); // GC allocate 8 entries
+  };
   ~GCVector() {
     if (this->_Contents) {
       Allocator alloc;
@@ -250,39 +171,50 @@ public:
   size_t size() const { return this->_Contents ? this->_Contents->_End : 0; };
   size_t capacity() const { return this->_Contents ? this->_Contents->_Capacity : 0; };
 
-  T &operator[](size_t n) { return this->_Contents ? (*this->_Contents)[n] : this->errorEmpty(); };
-  const T &operator[](size_t n) const { return this->_Contents ? (*this->_Contents)[n] : this->errorEmpty(); };
+  T& operator[](size_t n) {
+    GCTOOLS_ASSERT(this->_Contents);
+    return (*this->_Contents)[n];
+  };
+  const T& operator[](size_t n) const {
+    GCTOOLS_ASSERT(this->_Contents);
+    return (*this->_Contents)[n];
+  };
 
-  void push_back(const value_type &x) {
+  void push_back(const value_type& x) {
     if (!this->_Contents) {
       this->reserve(GCVectorPad);
     }
     tagged_pointer_to_moveable vec = this->_Contents;
     Allocator alloc;
-#ifdef DEBUG_ASSERTS
+#ifdef DEBUG_ASSERT
     if (this->_Contents->_End > this->_Contents->_Capacity) {
-      THROW_HARD_ERROR(BF("The end should NEVER be beyond the capacity"));
+      printf("%s:%d this@%p this->_Contents -> %p\n", __FILE__, __LINE__, this, this->_Contents.raw_());
+      printf("%s:%d this->_Contents->_End = %lu  this->_Contents->_Capacity = %lu\n", __FILE__, __LINE__, this->_Contents->_End,
+             this->_Contents->_Capacity);
+      throw_hard_error("The end should NEVER be beyond the capacity");
     };
 #endif
-    if (this->_Contents->_End == this->_Contents->_Capacity) {
+    size_t contents_end = this->_Contents->_End;
+    size_t contents_capacity = this->_Contents->_Capacity;
+    if (contents_end == contents_capacity) {
       // This is where we grow the Vector
-      size_t newCapacity = this->_Contents->_Capacity * GCVectorGrow;
+      size_t new_capacity = contents_capacity * GCVectorGrow;
       GC_LOG(("Increasing capacity to %zu\n", newCapacity));
-#ifdef DEBUG_ASSERTS
-      if (newCapacity > 65536) {
+#ifdef DEBUG_ASSERT
+      if (new_capacity > 65536) {
         printf("%s:%d gcvector capacity is larger than 65536\n", __FILE__, __LINE__);
       }
 #endif
-      vec = alloc.allocate(newCapacity);
-      new (&*vec) GCVector_moveable<T>(newCapacity);
-      for (size_t zi(0); zi < this->_Contents->_End; ++zi) {
+      vec = alloc.allocate_kind(Header_s::BadgeStampWtagMtag::make<impl_type>(), new_capacity);
+      new (&*vec) GCVector_moveable<T>(new_capacity);
+      for (size_t zi(0); zi < contents_end; ++zi) {
         // the array at newAddress is undefined - placement new to copy
         alloc.construct(&((*vec)[zi]), (*this->_Contents)[zi]);
       };
-      vec->_End = this->_Contents->_End;
+      vec->_End = contents_end;
     }
     // Placement new in the incoming value of x
-    alloc.construct(&((*vec)[this->_Contents->_End]), x);
+    alloc.construct(&((*vec)[contents_end]), x);
     ++vec->_End;
     if (vec != this->_Contents) {
       // Save the old vector impl
@@ -301,7 +233,7 @@ public:
     if (!this->_Contents) {
       tagged_pointer_to_moveable vec;
       size_t newCapacity = (n == 0 ? GCVectorPad : n);
-      vec = alloc.allocate(newCapacity);
+      vec = alloc.allocate_kind(Header_s::StampWtagMtag::make<impl_type>(), newCapacity);
       new (&*vec) GCVector_moveable<T>(newCapacity);
       // the array at newAddress is undefined - placement new to copy
       vec->_End = 0;
@@ -311,7 +243,7 @@ public:
     if (n > this->_Contents->_Capacity) {
       tagged_pointer_to_moveable vec(this->_Contents);
       size_t newCapacity = n;
-      vec = alloc.allocate(newCapacity);
+      vec = alloc.allocate_kind(Header_s::StampWtagMtag::make<impl_type>(), newCapacity);
       new (&*vec) GCVector_moveable<T>(newCapacity);
       // the array at newAddress is undefined - placement new to copy
       for (size_t zi(0); zi < this->_Contents->_End; ++zi)
@@ -326,12 +258,22 @@ public:
   }
 
   /*! Resize the vector so that it contains AT LEAST n elements */
-  void resize(size_t n, const value_type &x = value_type()) {
+  void resize(size_t n, const value_type& x = value_type()) {
     Allocator alloc;
     if (!this->_Contents) {
       tagged_pointer_to_moveable vec;
       size_t newCapacity = (n == 0 ? GCVectorPad : n * GCVectorGrow);
-      vec = alloc.allocate(newCapacity);
+      auto header = Header_s::BadgeStampWtagMtag::make<impl_type>();
+#ifdef DEBUG_SLOW
+      if (header == 0) {
+        std::string demangled;
+        core::maybe_demangle(typeid(impl_type).name(), demangled);
+        printf("%s:%d:%s You are trying to allocate a specialized container %s and it doesn't have a stamp yet - you need to add "
+               "GC_MANAGED_TYPE(%s) macro to memoryManagement.cc and for precise GC run the static analyzer\n",
+               __FILE__, __LINE__, __FUNCTION__, demangled.c_str(), demangled.c_str());
+      }
+#endif
+      vec = alloc.allocate_kind(header, newCapacity);
       new (&*vec) GCVector_moveable<T>(newCapacity);
       // the array at newAddress is undefined - placement new to copy
       for (size_t i(0); i < n; ++i)
@@ -346,7 +288,7 @@ public:
       tagged_pointer_to_moveable vec(this->_Contents);
       if (n > this->_Contents->_Capacity) {
         size_t newCapacity = n * GCVectorGrow;
-        vec = alloc.allocate(newCapacity);
+        vec = alloc.allocate_kind(Header_s::BadgeStampWtagMtag::make<impl_type>(), newCapacity);
         new (&*vec) GCVector_moveable<T>(newCapacity);
         // the array at newAddress is undefined - placement new to copy
         for (size_t zi(0); zi < this->_Contents->_End; ++zi)
@@ -379,7 +321,7 @@ public:
   }
 
   void pop_back() {
-#ifdef DEBUG_ASSERTS
+#ifdef DEBUG_ASSERT
     if (!this->_Contents)
       this->errorEmpty();
 #endif
@@ -393,20 +335,23 @@ public:
     }
   }
 
-  template <typename... ARGS>
-  iterator emplace(iterator position, ARGS &&... args) {
-#ifdef DEBUG_ASSERTS
-    if (!this->_Contents)
-      this->errorEmpty();
-#endif
+  inline void ensure_initialized() {
+    if (!this->_Contents) {
+      this->reserve(GCVectorPad);
+    }
+  }
+
+  template <typename... ARGS> const_iterator emplace(const_iterator position, ARGS&&... args) {
     Allocator alloc;
+    if (!this->_Contents)
+      this->resize(16, value_type());
     if (this->_Contents->_End == this->_Contents->_Capacity) {
       // Must grow the container
       // Save the insertion position relative to the start
       size_t iposition = position - this->begin();
       size_t newCapacity = (this->_Contents->_End + 1) * GCVectorGrow;
       // Allocate a new vector_moveable
-      tagged_pointer_to_moveable vec = alloc.allocate(newCapacity);
+      tagged_pointer_to_moveable vec = alloc.allocate_kind(Header_s::BadgeStampWtagMtag::make<impl_type>(), newCapacity);
       new (&*vec) GCVector_moveable<T>(newCapacity);
       // copy elements up to but not including iposition
       for (size_t zi(0); zi < iposition; ++zi)
@@ -422,7 +367,7 @@ public:
       size_t num = oldVec->_End;
       oldVec->_End = 0;
       alloc.deallocate(oldVec, num);
-      return iterator(this->_Contents, iposition);
+      return &(*this->_Contents)[iposition];
     }
     // slide the elements from position up to the end one element up
     // Use construct/destruct to deal with objects that have complex constructors/destructors
@@ -436,8 +381,7 @@ public:
     return position;
   }
 
-  template <typename... ARGS>
-  void emplace_back(ARGS &&... args) {
+  template <typename... ARGS> void emplace_back(ARGS&&... args) {
     if (!this->_Contents) {
       this->reserve(GCVectorPad);
     }
@@ -449,8 +393,8 @@ public:
   // zp element_of (3 4 5 ... N-1 )
   // move 3<4 4<5 5<6 6<7 ... N-2<N-1
   // 0 1 2 4 5 6 7
-  iterator erase(const_iterator position) {
-#ifdef DEBUG_ASSERTS
+  iterator erase(iterator position) {
+#ifdef DEBUG_ASSERT
     if (!this->_Contents)
       this->errorEmpty();
 #endif
@@ -466,7 +410,6 @@ public:
     return (iterator)(position);
   }
 
-  /*! Resize the vector so that it contains AT LEAST n elements */
   void clear() {
     if (!this->_Contents)
       return;
@@ -475,16 +418,14 @@ public:
   }
 
   //  pointer_type data() const { return this->_Contents ? this->_Contents->data() : NULL; };
+  iterator begin() { return this->_Contents ? this->_Contents->begin() : NULL; };
+  iterator end() { return this->_Contents ? this->_Contents->end() : NULL; };
 
-  iterator begin() { return this->_Contents ? iterator(this->_Contents, 0) : iterator(); };
-  iterator end() { return this->_Contents ? iterator(this->_Contents, this->_Contents->_End) : iterator(); };
-
-  const_iterator begin() const { return this->_Contents ? iterator(this->_Contents, 0) : iterator(); };
-  const_iterator end() const { return this->_Contents ? iterator(this->_Contents, this->_Contents->_End) : iterator(); };
+  const_iterator begin() const { return this->_Contents ? this->_Contents->begin() : NULL; };
+  const_iterator end() const { return this->_Contents ? this->_Contents->end() : NULL; };
 };
 
-template <typename Vector>
-void vector_dump(const Vector &v, const char *head = "") {
+template <typename Vector> void vector_dump(const Vector& v, const char* head = "") {
   printf("%s vec@%p _C[%zu] _E[%zu] ", head, v.contents(), v.capacity(), v.size());
   size_t i;
   for (i = 0; i < v.capacity(); ++i) {
@@ -499,5 +440,3 @@ void vector_dump(const Vector &v, const char *head = "") {
 }
 
 } // namespace gctools
-
-#endif

@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: package.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,80 +25,84 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef Package_H //[
-#define Package_H
 
 #include <stdio.h>
 #include <string>
 #include <vector>
 #include <set>
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/hashTable.fwd.h>
 #include <clasp/core/bignum.fwd.h>
-#include <clasp/core/holder.h>
+#include <clasp/core/mpPackage.h>
 #include <clasp/core/wrappers.h>
 
 namespace core {
 
+#define WITH_PACKAGE_READ_LOCK(pkg) WITH_READ_LOCK(pkg->_Lock)
+#define WITH_PACKAGE_READ_WRITE_LOCK(pkg) WITH_READ_WRITE_LOCK(pkg->_Lock)
+
 SMART(Package);
-class Package_O : public T_O {
-  LISP_BASE1(T_O);
-  LISP_CLASS(core, ClPkg, Package_O, "Package");
+class Package_O : public General_O {
+  LISP_CLASS(core, ClPkg, Package_O, "Package", General_O);
+  friend T_sp cl__delete_package(T_sp pobj);
+  friend List_sp core__export_conflicts(Package_sp, SimpleString_sp, Symbol_sp);
 
 public: // virtual functions inherited from Object
-  void initialize();
-#if defined(XML_ARCHIVE)
-  void archiveBase(ArchiveP node);
-#endif // defined(XML_ARCHIVE)
-  string __repr__() const;
+  void initialize() override;
+  string __repr__() const override;
+  void __write__(T_sp stream) const override;
 
-GCPRIVATE: // instance variables
-  gctools::gcstring _Name;
+public: // instance variables
   HashTableEqual_sp _InternalSymbols;
   HashTableEqual_sp _ExternalSymbols;
   HashTableEq_sp _Shadowing;
+  SimpleString_sp _Name;
   gctools::Vec0<Package_sp> _UsingPackages;
   gctools::Vec0<Package_sp> _PackagesUsedBy;
-  bool _KeywordPackage;
-  bool _AmpPackage;
-  bool _ActsLikeKeywordPackage;
+  std::atomic<bool> _KeywordPackage;
+  std::atomic<bool> _AmpPackage;
+  std::atomic<bool> _ActsLikeKeywordPackage;
   List_sp _Nicknames;
+  List_sp _LocalNicknames;
+  T_sp _Documentation;
+#ifdef CLASP_THREADS
+  mutable mp::SharedMutex _Lock;
+#endif
+  bool systemLockedP = false;
+  bool userLockedP = false;
+  bool zombieP = false;
 
 public: // Creation class functions
-  static Package_sp create(const string &p);
+  static Package_sp create(const string& p);
 
 public:
   /*! Very low level - add to internal symbols unless keyword
-	  package, in that case add to external symbols */
-  void add_symbol_to_package(const char *symName, Symbol_sp sym, bool exportp = false);
+          package, in that case add to external symbols */
+  void add_symbol_to_package_no_lock(SimpleString_sp nameKey, Symbol_sp sym, bool exportp = false);
+  void add_symbol_to_package(SimpleString_sp nameKey, Symbol_sp sym, bool exportp = false);
+  void bootstrap_add_symbol_to_package(const char* symName, Symbol_sp sym, bool exportp = false, bool shadowp = false);
 
 private:
-  // This returns a NULL smart_ptr if it doesn't find a conflict
-  // so that it can be used within the expression of an if statement
-  Package_sp export_conflict_or_NULL(Str_sp nameKey, Symbol_sp sym);
+  // Returns a list of packages that will newly conflict.
+  List_sp export_conflicts(SimpleString_sp nameKey, Symbol_sp sym);
 
 public:
-  string packageName() const { return this->_Name.asStdString(); };
+  string packageName() const;
 
   T_mv packageHashTables() const;
 
-  void setNicknames(List_sp nicknames) { this->_Nicknames = nicknames; };
-  List_sp getNicknames() const { return this->_Nicknames; };
-#if 0
-    symbolIterator beginExternals() { return this->_ExternalSymbols.begin();};
-    symbolIterator endExternals() { return this->_ExternalSymbols.end();};
+  void setNicknames(List_sp nicknames) {
+    WITH_PACKAGE_READ_WRITE_LOCK(this);
+    this->_Nicknames = nicknames;
+  };
+  List_sp getNicknames() const {
+    WITH_PACKAGE_READ_LOCK(this);
+    return this->_Nicknames;
+  };
 
-    const_symbolIterator beginExternals() const { return this->_ExternalSymbols.begin();};
-    const_symbolIterator endExternals() const { return this->_ExternalSymbols.end();};
-
-    symbolIterator beginInternals() { return this->_InternalSymbols.begin();};
-    symbolIterator endInternals() { return this->_InternalSymbols.end();};
-
-    const_symbolIterator beginInternals() const { return this->_InternalSymbols.begin();};
-    const_symbolIterator endInternals() const { return this->_InternalSymbols.end();};
-#endif
-
+  void setLocalNicknames(List_sp localNicknames) { this->_LocalNicknames = localNicknames; }
+  List_sp getLocalNicknames() const { return this->_LocalNicknames; }
+  T_sp findPackageByLocalNickname(String_sp);
   void setKeywordPackage(bool b) { this->_KeywordPackage = b; };
   bool isKeywordPackage() const { return this->_KeywordPackage; };
   // Cando makes a package that acts like the keyword package (symbol values are symbols and all symbols extern)
@@ -110,12 +115,13 @@ public:
   bool shadow(List_sp listOfSymbolNames);
 
   /*! support for CLHS::shadow */
-  bool shadow(Str_sp sym);
+  bool shadow(String_sp sym);
 
-  //	bool areThereNameCollisions(Package_sp otherPackage);
+  /*! support for CLHS::unexport */
+  void unexport(Symbol_sp sym);
 
-  string getName() const { return this->_Name.asStdString(); };
-  void setName(const string &n) { this->_Name = n; };
+  string getName() const;
+  void setName(const string& n);
 
   bool isExported(Symbol_sp sym);
 
@@ -123,20 +129,24 @@ public:
   void _export2(Symbol_sp sym);
 
   /*! Return the symbol if we contain it directly */
-  Symbol_mv findSymbolDirectlyContained(Str_sp nameKey) const;
+  Symbol_mv findSymbolDirectlyContained(String_sp nameKey) const;
 
-  Symbol_mv _findSymbol(Str_sp nameKey) const;
+  Symbol_mv findSymbol_SimpleString_no_lock(SimpleString_sp nameKey) const;
+  Symbol_mv findSymbol_SimpleString(SimpleString_sp nameKey) const;
 
   /*! Return the (values symbol [:inherited,:external,:internal])
-	 */
-  Symbol_mv findSymbol(const string &name) const;
+   */
+  Symbol_mv findSymbol(const string& name) const;
+  Symbol_mv findSymbol(String_sp name) const;
 
   //	T_mv findSymbol(const string& symbolName);
 
-  /*! Return the Symbol if we contain it 
-		 * and create it and return it if we don't
-		 */
-  T_mv intern(const string &symbolName);
+  /*! Return the Symbol if we contain it
+   * and create it and return it if we don't
+   */
+  T_mv intern(SimpleString_sp symbolName);
+
+  bool unintern_unsafe(Symbol_sp sym);
 
   /*! Remove the symbol from the package */
   bool unintern(Symbol_sp sym);
@@ -144,6 +154,7 @@ public:
   List_sp packageUseList();
   List_sp packageUsedByList();
 
+  void import1(Symbol_sp); // import one symbol
   /*! Import the symbols into this package - see CLHS */
   void import(List_sp symbols);
 
@@ -154,17 +165,23 @@ public:
   List_sp shadowingSymbols() const;
 
   /*! Use the package, if there are any overlapping symbols
-		 * then don't use the package and return false.
-		 * If you use the package return true.
-		 */
+   * then don't use the package and return false.
+   * If you use the package return true.
+   */
   bool usePackage(Package_sp usePackage);
 
   /*! Unuse the package, the reverse of usePackage
-		 */
+   */
   bool unusePackage(Package_sp usePackage);
+  bool unusePackage_no_outer_lock(Package_sp usePackage);
+  bool unusePackage_no_inner_lock(Package_sp usePackage);
 
+  bool usingPackageP_no_lock(Package_sp pkg) const;
   /*! Return true if we are using the package */
   bool usingPackageP(Package_sp pkg) const;
+
+  T_sp documentation() const { return this->_Documentation; }
+  void setDocumentation(T_sp docstring) { this->_Documentation = docstring; }
 
   /*! Dump all the symbols to stdout */
   void dumpSymbols();
@@ -173,27 +190,39 @@ public:
   T_mv hashTables() const;
 
   /*! Map over the External key/value pairs */
-  void mapExternals(KeyValueMapper *mapper);
+  void mapExternals(KeyValueMapper* mapper);
 
   /*! Map over the Internal key/value pairs */
-  void mapInternals(KeyValueMapper *mapper);
+  void mapInternals(KeyValueMapper* mapper);
+
+  void setSystemLockedP(bool value) { this->systemLockedP = value; }
+
+  bool getSystemLockedP() { return this->systemLockedP; }
+
+  void setUserLockedP(bool value) { this->userLockedP = value; }
+
+  bool getUserLockedP() { return this->userLockedP; }
+
+  void setZombieP(bool value) { this->zombieP = value; }
+
+  bool getZombieP() { return this->zombieP; }
 
 public:
-  Package_O() : _Nicknames(_Nil<T_O>()), _ActsLikeKeywordPackage(false){};
+  // Not default constructable
+  Package_O()
+      : _ActsLikeKeywordPackage(false), _Nicknames(nil<T_O>()), _LocalNicknames(nil<T_O>()), _Documentation(nil<T_O>()),
+        _Lock(PACKAGE__NAMEWORD){};
+
+  virtual void fixupInternalsForSnapshotSaveLoad(snapshotSaveLoad::Fixup* fixup) {
+    if (snapshotSaveLoad::operation(fixup) == snapshotSaveLoad::LoadOp) {
+      //      printf("%s:%d:%s About to initialize an mp::SharedMutex for a Package_O object\n", __FILE__, __LINE__, __FUNCTION__ );
+      new (&this->_Lock) mp::SharedMutex(PACKAGE__NAMEWORD);
+    }
+  }
+
   virtual ~Package_O(){};
 };
 
-struct FindConflicts : public KeyValueMapper {
-public:
-  set<string> _conflicts;
-  Package_sp _me;
-  FindConflicts(Package_sp me) {
-    this->_me = me;
-  }
-
-  virtual bool mapKeyValue(T_sp key, T_sp value);
-};
-T_mv cl_findSymbol(const string &symbolName, T_sp packageDesig);
-};
-TRANSLATE(core::Package_O);
-#endif //]
+T_mv cl__find_symbol(String_sp symbolName, T_sp packageDesig);
+T_sp cl__delete_package(T_sp pobj);
+}; // namespace core

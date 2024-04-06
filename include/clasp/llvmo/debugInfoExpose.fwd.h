@@ -1,17 +1,19 @@
+#pragma once
+
 /*
     File: debugInfoExpose.fwd.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,12 +26,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#ifndef _debugInfoExpose_fwd_H
-#define _debugInfoExpose_fwd_H
 
 namespace llvmo {
-FORWARD(DebugInfo);
-FORWARD(DIDescriptor);
+FORWARD(DILocation);
+FORWARD(DINode);
 FORWARD(DIScope);
 FORWARD(DIFile);
 FORWARD(DISubprogram);
@@ -37,5 +37,7 @@ FORWARD(DILexicalBlock);
 FORWARD(DICompileUnit);
 FORWARD(DINameSpace);
 FORWARD(DIBuilder);
-};
-#endif
+
+core::T_mv llvm_sys__address_information(void* address, bool verbose);
+
+}; // namespace llvmo

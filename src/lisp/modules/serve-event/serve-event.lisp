@@ -35,34 +35,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defpackage "SERVE-EVENT"
-  (:use "CL" "FFI" #-clasp "UFFI" #+clasp "SERVE-EVENT-INTERNAL")
+  (:use "CL" #-clasp "UFFI" #+clasp "SERVE-EVENT-INTERNAL")
   (:export "WITH-FD-HANDLER" "ADD-FD-HANDLER" "REMOVE-FD-HANDLER"
            "SERVE-EVENT" "SERVE-ALL-EVENTS"))
 (in-package "SERVE-EVENT")
 
-#+clasp
-(defmacro c-inline (fn-name (&rest values) (&rest c-types) return-type C-code &key one-liner side-effects)
-  `(,fn-name ,@values))
-
-
-#-clasp
-(clines
- "#include <errno.h>"
- "#include <sys/select.h>")
-
-(eval-when (:compile-toplevel :execute)
-  #-clasp(defmacro c-constant (c-name)
-           `(c-inline () () :int ,c-name :one-liner t))
-  #+clasp(defmacro c-constant (c-name) `,c-name)
-  #-clasp(defmacro define-c-constants (&rest args)
-           `(let ()
-              ,@(loop
-                   for (lisp-name c-name) on args by #'cddr
-                   collect `(defconstant ,lisp-name (c-constant ,c-name))))))
-
-#-clasp
-(define-c-constants
-    +eintr+ "EINTR")
 
 (defstruct (handler
              (:constructor make-handler (descriptor direction function))
@@ -81,17 +58,9 @@
   "List of all the currently active handlers for file descriptors")
 
 (defun coerce-to-descriptor (stream-or-fd direction)
-  (etypecase stream-or-fd
-    (fixnum stream-or-fd)
-    (file-stream (si:file-stream-fd stream-or-fd))
-    (two-way-stream
-     (coerce-to-descriptor
-      (case direction
-        (:input  (two-way-stream-input-stream  stream-or-fd))
-        (:output (two-way-stream-output-stream stream-or-fd)))
-      direction))
-    #+clos-streams
-    (stream (gray::stream-file-descriptor stream-or-fd direction))))
+  (if (typep stream-or-fd 'fixnum)
+      stream-or-fd
+      (gray:stream-file-descriptor stream-or-fd direction)))
 
 ;;; Add a new handler to *descriptor-handlers*.
 (defun add-fd-handler (stream-or-fd direction function)
@@ -134,29 +103,16 @@
 
 
 (defmacro fd-zero(fdset)
-  `(c-inline #+clasp ll-fd-zero
-	     (,fdset) (:object) :void 
-             "FD_ZERO((fd_set*)#0->foreign.data)"
-             :one-liner t
-             :side-effects t))
+  `(ll-fd-zero ,fdset))
 
 (defmacro fd-set (fd fdset)
-  `(c-inline #+clasp ll-fd-set
-	     (,fd ,fdset) (:int :object) :void 
-             "FD_SET(#0, (fd_set*)#1->foreign.data);"
-             :one-liner t
-             :side-effects t))
+  `(ll-fd-set ,fd ,fdset))
 
 (defmacro fd-isset (fd fdset)
-  `(c-inline #+clasp ll-fd-isset
-	     (,fd ,fdset) (:int :object) :int 
-             "FD_ISSET(#0, (fd_set*)#1->foreign.data)"
-             :one-liner t
-             :side-effects t))
+  `(ll-fd-isset ,fd ,fdset))
 
 (defun fdset-size ()
-  (c-inline #+clasp ll-fdset-size
-	    () () :int "sizeof(fd_set)" :one-liner t :side-effects nil))
+  `(ll-fdset-size))
 
 
 (defun serve-event (&optional (seconds nil))
@@ -170,11 +126,10 @@
   ;; However we can fine out its size and allocate a char array of
   ;; the same size which can be used in its place.
   (let ((fsize (fdset-size)))
-    (with-foreign-objects ((rfd `(:array :unsigned-byte ,fsize))
-                           (wfd `(:array :unsigned-byte ,fsize)))
+    (clasp-ffi:with-foreign-objects ((rfd `(:array :unsigned-byte ,fsize))
+                                     (wfd `(:array :unsigned-byte ,fsize)))
       (fd-zero rfd)
       (fd-zero wfd)
-
       (let ((maxfd 0))
         ;; Load the descriptors into the relevant set
         (dolist (handler *descriptor-handlers*)
@@ -188,28 +143,8 @@
         (multiple-value-bind (retval errno)
 	    (if (null seconds)
 		;; No timeout
-		(c-inline #+clasp ll-serve-event-no-timeout
-			  (rfd      wfd    (1+ maxfd))
-			  (:object :object :int) (values :int :int)
-			  "{ @(return 0) = select(#2, (fd_set*)#0->foreign.data,
-                                                      (fd_set*)#1->foreign.data,
-                                                      NULL, NULL);
-                             @(return 1) = errno; }"
-			  :one-liner nil
-			  :side-effects t)
-		(c-inline #+clasp ll-serve-event-with-timeout
-			  (rfd      wfd    (1+ maxfd) seconds) 
-			  (:object :object :int       :double) (values :int :int)
-			  "{ struct timeval tv;
-                             double seconds = #3;
-                                tv.tv_sec = seconds;
-                                tv.tv_usec = (seconds * 1e6);
-                                @(return 0) = select(#2, (fd_set*)#0->foreign.data,
-                                                         (fd_set*)#1->foreign.data,
-                                                         NULL, &tv);
-                                @(return 1) = errno; }"
-			  :one-liner nil
-			  :side-effects t))
+                (ll-serve-event-no-timeout rfd wfd (1+ maxfd))
+                (ll-serve-event-with-timeout rfd wfd (1+ maxfd) seconds))
 
 	  (cond ((zerop retval) 
 		 nil)

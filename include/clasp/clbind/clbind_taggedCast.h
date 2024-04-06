@@ -1,9 +1,9 @@
-#ifndef clbind_taggedCast_H
-#define clbind_taggedCast_H
+#pragma once
 
 namespace gctools {
 
-template <typename Pols, typename Pointer, typename T, typename Sig>
+#if 0
+  template <typename Pols, typename Pointer, typename T, typename Sig>
 struct TaggedCast<core::BuiltinClosure *, clbind::VariadicConstructorFunctoid<Pols, Pointer, T, Sig> *> {
   typedef core::BuiltinClosure *ToType;
   typedef clbind::VariadicConstructorFunctoid<Pols, Pointer, T, Sig> *FromType;
@@ -16,5 +16,5 @@ struct TaggedCast<core::BuiltinClosure *, clbind::VariadicConstructorFunctoid<Po
     return NULL;
   }
 };
-};
 #endif
+}; // namespace gctools

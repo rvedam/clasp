@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,7 +24,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
 //
 // (C) 2004 Christian E. Schafmeister
@@ -33,57 +33,46 @@ THE SOFTWARE.
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/lisp.h>
+#include <clasp/core/bformat.h>
 #include <clasp/core/smallMultimap.h>
 #include <clasp/core/multipleValues.h>
-#include <clasp/core/environment.h>
 #include <clasp/core/cons.h>
 #include <clasp/core/numbers.h>
 #include <clasp/core/wrappers.h>
 
 namespace core {
 
-#define ARGS_core_makeSmallMultimap "()"
-#define DECL_core_makeSmallMultimap ""
-#define DOCS_core_makeSmallMultimap "makeSmallMultimap"
-SmallMultimap_sp core_makeSmallMultimap() {
-  _G();
-  GC_ALLOCATE(SmallMultimap_O, sm);
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(makeSmallMultimap)dx");
+DOCGROUP(clasp);
+CL_DEFUN SmallMultimap_sp core__make_small_multimap() {
+  auto sm = gctools::GC<SmallMultimap_O>::allocate_with_default_constructor();
   return sm;
 };
 
-void SmallMultimap_O::describe() {
+CL_LISPIFY_NAME("small_multimap_describe");
+CL_DEFMETHOD void SmallMultimap_O::describe() {
   for (auto it = this->map.begin(); it != this->map.end(); ++it) {
-    printf("%s:%d  key: %s   value: %s\n", __FILE__, __LINE__, _rep_(it->first).c_str(), _rep_(it->second).c_str());
+    clasp_write_string(fmt::format("{}:{}  key: {}   value: {}\n", __FILE__, __LINE__, _rep_(it->first), _rep_(it->second)));
   }
 }
 
-void SmallMultimap_O::describeRange(T_sp key) {
+CL_LISPIFY_NAME("small_multimap_describe_range");
+CL_DEFMETHOD void SmallMultimap_O::describeRange(T_sp key) {
   pair<map_type::iterator, map_type::iterator> range = this->map.equal_range(key);
   for (auto it = range.first; it != range.second; ++it) {
-    printf("%s:%d  key: %s   value: %s\n", __FILE__, __LINE__, _rep_(it->first).c_str(), _rep_(it->second).c_str());
+    clasp_write_string(fmt::format("{}:{}  key: {}   value: {}\n", __FILE__, __LINE__, _rep_(it->first), _rep_(it->second)));
   }
 }
 
-void SmallMultimap_O::insert(T_sp key, T_sp val) {
+CL_LISPIFY_NAME("small_multimap_insert");
+CL_DEFMETHOD void SmallMultimap_O::insert(T_sp key, T_sp val) {
   pair<map_type::iterator, bool> found = this->map.insert(std::make_pair(key, val));
   (void)found;
 }
 
-void SmallMultimap_O::exposeCando(Lisp_sp lisp) {
-  class_<SmallMultimap_O>()
-      .def("small_multimap_describe", &SmallMultimap_O::describe)
-      .def("small_multimap_describe_range", &SmallMultimap_O::describeRange)
-      .def("small_multimap_insert", &SmallMultimap_O::insert)
-      .def("small_multimap_size", &SmallMultimap_O::size);
-  CoreDefun(makeSmallMultimap);
-}
+CL_LISPIFY_NAME("small_multimap_contains");
+CL_DEFMETHOD bool SmallMultimap_O::contains(T_sp key) { return this->map.contains(key); }
 
-void SmallMultimap_O::exposePython(Lisp_sp lisp) {
-  _G();
-#ifdef USEBOOSTPYTHON
-  PYTHON_CLASS(CorePkg, SmallMultimap, "", "", _lisp);
-#endif
-}
-
-EXPOSE_CLASS(core, SmallMultimap_O);
-};
+}; // namespace core

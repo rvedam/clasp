@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+
+CXXFLAGS=
+CPPFLAGS=
+CFLAGS=
+DEB_BUILD_OPTIONS=nocheck nostrip
+
+DOPACKAGES := $(shell dh_listpackages)
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf clasp-build && rm -rf cando-build
+
+override_dh_auto_test:
+	echo ninja -C build test-boehmprecise
+
+override_dh_auto_configure:
+ifneq (,$(filter clasp-cl,$(DOPACKAGES)))
+	./koga --build-mode=bytecode-faso --reproducible-build --build-path=clasp-build/ --ldlibs=-ldl --package-path=$$(pwd)/debian/clasp-cl/ --bin-path=/usr/bin/ --share-path=/usr/share/clasp/ --lib-path=/usr/lib/clasp/
+endif
+ifneq (,$(filter cando,$(DOPACKAGES)))
+	./koga --build-mode=bytecode-faso --reproducible-build --build-path=cando-build/ --extensions=cando,seqan-clasp --ldlibs=-ldl --package-path=$$(pwd)/debian/cando/ --bin-path=/usr/bin/ --share-path=/usr/share/clasp/ --lib-path=/usr/lib/clasp/
+endif
+
+override_dh_auto_build:
+ifneq (,$(filter clasp-cl,$(DOPACKAGES)))
+	ninja -C clasp-build
+endif
+ifneq (,$(filter cando,$(DOPACKAGES)))
+	ninja -C cando-build
+endif
+
+override_dh_auto_install:
+ifneq (,$(filter clasp-cl,$(DOPACKAGES)))
+	ninja -C clasp-build install
+endif
+ifneq (,$(filter cando,$(DOPACKAGES)))
+	ninja -C cando-build install
+endif
+

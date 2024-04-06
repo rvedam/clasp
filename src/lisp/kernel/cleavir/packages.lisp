@@ -1,24 +1,33 @@
 (cl:in-package #:common-lisp-user)
 
-(defpackage #:cclasp-build
-  (:use #:common-lisp #:core)
-  (:export
-   #:compile-full-cclasp
-   #:link))
-
 (defpackage #:clasp-cleavir
   (:use #:common-lisp #:core)
-  (:nicknames #:cc)
+  (:nicknames #:clasp-cleavir-translate-bir)
+  (:local-nicknames (#:bir #:cleavir-bir)
+                    (#:bir-transformations #:cleavir-bir-transformations)
+                    (#:ast #:cleavir-ast)
+                    (#:ctype #:cleavir-ctype)
+                    (#:cst-to-ast #:cleavir-cst-to-ast)
+                    (#:env #:cleavir-env)
+                    (#:policy #:cleavir-compilation-policy))
   (:export
+   #:*use-cst*
+   #:literal
+   #:%literal-index
+   #:*clasp-ordinary-lambda-list-grammar*
    #:cleavir-compile-eval
+   #:compile-cst-or-form
    #:clasp
-   #:invoke-instruction
-   #:invoke-multiple-value-call-instruction
    #:*debug-log*
-   #:instruction-gid
+   #:*debug-final-gml*
+   #:*debug-cleavir*
+   #:*debug-cleavir-literals*
+   #+stealth-gids :instruction-gid
+   #:unsafe-multiple-value-foreign-call
+   #:unsafe-foreign-call
+   #:unsafe-foreign-call-pointer
    #:datum-gid
    #:create-landing-pad
-   #:translate-datum
    #:convert-funcalls
    #:finalize-unwind-and-landing-pad-instructions
    #:cleavir-compile
@@ -27,101 +36,79 @@
    #:*function-inline-asts*
    #:*clasp-env*
    #:*clasp-system*
-))
-
-(defpackage #:clasp-cleavir-generate-ast
-  (:nicknames #:cc-generate-ast))
-
+   #:alloca-i8
+   #:inline-ast
+   )
+  (:export #:primop-rtype-info))
 
 (defpackage #:clasp-cleavir-ast
   (:nicknames #:cc-ast)
+  (:local-nicknames (#:ast #:cleavir-ast))
   (:use #:common-lisp)
-  (:export 
-   #:hoist-load-time-value
-   #:precalculated-value-ast
-   #:make-precalc-vector-function-ast
-   #:named-function-ast
-   #:debug-message-ast
+  (:export
+   #:multiple-value-foreign-call-ast
+   #:foreign-call-ast
+   #:foreign-call-pointer-ast
+   #:argument-asts
+   #:function-name
+   #:foreign-types
    #:make-throw-ast
-   #:cleanup-ast
-   #:make-setf-fdefinition-ast
-   #:lambda-name
-   #:debug-message
-   #:precalc-symbol-reference-ast
-   #:precalc-symbol-reference-index
-   #:precalc-symbol-reference-ast-original-object
-   #:precalc-value-reference-ast
-   #:precalc-value-reference-index
-   #:precalc-value-reference-ast-original-object
-   #:setf-fdefinition-ast
    #:throw-ast
    #:result-ast
    #:tag-ast
    #:datum-id
    ))
 
-(defpackage #:clasp-cleavir-hir
-  (:use #:common-lisp)
-  (:export 
-   #:precalc-reference-instruction
-   #:named-enter-instruction
-   #:landing-pad-named-enter-instruction
-   #:frame-holder
-   #:indexed-unwind-instruction
-   #:landing-pad-instruction
-   #:landing-pad-return-instruction
-   #:landing-pad
-   #:jump-id
-   #:make-named-enter-instruction
-   #:debug-message-instruction
-   #:make-precalc-symbol-instruction
-   #:make-precalc-value-instruction
-   #:invoke-instruction
-   #:make-setf-fdefinition-instruction
-   #:make-throw-instruction
-   #:lambda-name
-   #:precalc-symbol-instruction
-   #:precalc-value-instruction
-   #:debug-message
-   #:setf-fdefinition-instruction
-   #:throw-instruction
-   #:precalc-symbol-instruction-original-object
-   #:precalc-value-instruction-original-object
-   #:instruction-id
-   #:push-special-binding-instruction
-   #:make-push-special-binding-instruction
-   #:pop-special-binding-instruction
-   #:make-pop-special-binding-instruction
-   ))
+(defpackage #:clasp-cleavir-bir
+  (:use #:cl)
+  (:nicknames #:cc-bir)
+  (:local-nicknames (#:bir #:cleavir-bir)
+                    (#:ast-to-bir #:cleavir-ast-to-bir)
+                    (#:build #:cleavir-bir-builder))
+  (:export #:header-stamp-case
+           #:foreign-call-pointer #:foreign-types
+           #:mv-foreign-call #:function-name
+           #:atomic #:order))
 
-(defpackage #:clasp-cleavir-ast-to-hir
-  (:use #:common-lisp)
-  (:export
-   #:*landing-pad*)
-)
+(defpackage #:cc-bir-to-bmir
+  (:use #:cl)
+  (:local-nicknames (#:bir #:cleavir-bir))
+  (:export #:reduce-module-instructions)
+  (:export #:assign-module-rtypes #:insert-casts-into-module))
 
-(defpackage #:cc-generate-ast
-  (:use #:common-lisp)
-  )
+(defpackage #:cc-bmir-to-blir
+  (:use #:cl)
+  (:local-nicknames (#:bir #:cleavir-bir))
+  (:export #:reduce-module-instructions))
 
-(defpackage #:cc-hir-to-mir
-  (:use #:common-lisp)
-)
+(defpackage #:clasp-cleavir-bmir
+  (:nicknames #:cc-bmir)
+  (:shadow #:characterp #:consp #:load #:variable)
+  (:local-nicknames (#:bir #:cleavir-bir))
+  (:export #:fixnump #:characterp #:consp #:single-float-p #:generalp
+           #:headerq #:info)
+  (:export #:cast #:unboxed-constant-reference
+           #:mtf #:append-values #:fixed-mv-call #:fixed-mv-local-call)
+  (:export #:datum)
+  (:export #:rtype)
+  (:export #:cast-one))
 
-(defpackage #:cc-mir
-  (:use #:common-lisp)
-  (:export 
-   #:enter-instruction
-   #:closure-pointer-dynamic-lexical-location
-   #:describe-mir
-   #:assign-mir-instruction-datum-ids
-   ))
+(defpackage #:clasp-cleavir-blir
+  (:nicknames #:cc-blir)
+  (:local-nicknames (#:bir #:cleavir-bir))
+  ;; Shadowing cl:load isn't strictly necessary, but will keep it from
+  ;; showing up in M-. or the like.
+  (:shadow #:load)
+  (:export #:memref2 #:offset #:load #:store #:cas))
 
-(defpackage #:cleavir-ir-gml
-  (:use #:common-lisp #:cleavir-ir)
-  (:export
-   #:draw-flowchart))
-
-(defpackage #:lisp-executable.creation
-  (:use #:common-lisp))
-
+(defpackage #:clasp-cleavir-vaslist
+  (:nicknames #:cc-vaslist)
+  (:local-nicknames (#:bir #:cleavir-bir)
+                    (#:ctype #:cleavir-ctype)
+                    (#:set #:cleavir-set)
+                    (#:attributes #:cleavir-attributes)
+                    (#:policy #:cleavir-compilation-policy))
+  (:shadow #:values-list #:nth #:nthcdr #:last #:butlast #:length)
+  (:export #:values-list #:nth #:nthcdr #:last #:butlast #:nendp #:length)
+  (:export #:maybe-transform-module)
+  (:export #:vaslistablep))

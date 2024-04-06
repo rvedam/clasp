@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -26,13 +26,13 @@ THE SOFTWARE.
 /* -^- */
 /* This is copied from ECL write_object.c and modified for C++ */
 
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
 #include <clasp/core/cons.h>
 #include <clasp/core/symbolTable.h>
-#include <clasp/core/str.h>
+#include <clasp/core/array.h>
 #include <clasp/core/designators.h>
 #include <clasp/core/predicates.h>
 #include <clasp/core/lispStream.h>
@@ -51,12 +51,12 @@ namespace core {
 bool will_print_as_hash(T_sp x) {
   T_sp circle_counter = _sym_STARcircle_counterSTAR->symbolValue();
   HashTable_sp circle_stack = gc::As<HashTable_sp>(_sym_STARcircle_stackSTAR->symbolValue());
-  T_sp code = circle_stack->gethash(x, _Unbound<T_O>());
+  T_sp code = circle_stack->gethash(x, unbound<T_O>());
   if (circle_counter.fixnump()) {
     return !(code.unboundp() || code.nilp());
   } else if (code.unboundp()) {
     /* Was not found before */
-    circle_stack->hash_table_setf_gethash(x, _Nil<T_O>());
+    circle_stack->hash_table_setf_gethash(x, nil<T_O>());
     return 0;
   } else {
     return 1;
@@ -77,10 +77,10 @@ Fixnum search_print_circle(T_sp x) {
   HashTable_sp circle_stack = gc::As<HashTable_sp>(_sym_STARcircle_stackSTAR->symbolValue());
   T_sp code;
   if (!circle_counter.fixnump()) {
-    code = circle_stack->gethash(x, _Unbound<T_O>());
+    code = circle_stack->gethash(x, unbound<T_O>());
     if (code.unboundp()) {
       /* Was not found before */
-      circle_stack->hash_table_setf_gethash(x, _Nil<T_O>());
+      circle_stack->hash_table_setf_gethash(x, nil<T_O>());
       return 0;
     } else if (code.nilp()) {
       /* This object is referenced twice */
@@ -90,10 +90,10 @@ Fixnum search_print_circle(T_sp x) {
       return 2;
     }
   } else {
-    code = circle_stack->gethash(x, _Unbound<T_O>());
+    code = circle_stack->gethash(x, unbound<T_O>());
     if (code.unboundp() || code.nilp()) {
       /* Is not referenced or was not found before */
-      /* _ecl_sethash(x, circle_stack, ECL_NIL); */
+      /* _ecl__sethash(x, circle_stack, ECL_NIL); */
       return 0;
     } else if (code == _lisp->_true()) {
       /* This object is referenced twice, but has no code yet */
@@ -109,76 +109,81 @@ Fixnum search_print_circle(T_sp x) {
   }
 }
 
-T_sp write_object(T_sp x, T_sp stream) {
-#if 1 //def ECL_CMU_FORMAT   // Disable this for now - until we get Grey streams working
-  if (!cl::_sym_STARprint_prettySTAR.unboundp() && cl::_sym_STARprint_prettySTAR->symbolValueUnsafe().notnilp()) {
-    T_sp objx = x;
-    T_mv mv_f = eval::funcall(cl::_sym_pprint_dispatch, objx);
-    T_sp f0 = mv_f;
-    T_sp f1 = mv_f.valueGet(1);
-    if (f1.notnilp()) {
-      eval::funcall(f0, stream, objx);
-      return objx;
-    }
-  }
-#endif /* ECL_CMU_FORMAT */
-  bool circle = clasp_print_circle();
-  if (circle && (x) && !x.fixnump() && !x.valistp() && !x.characterp() && !cl_symbolp(x) && !cl_numberp(x) // && !x.single_floatp()
-      && (cl_listp(x) || !cl_symbolp(x) || !gc::As<Symbol_sp>(x)->homePackage().nilp())) {
-    Fixnum code;
-    T_sp circle_counter = _sym_STARcircle_counterSTAR->symbolValue();
-    if (circle_counter.nilp()) {
-      HashTable_sp hash = cl_make_hash_table(cl::_sym_eq,
-                                             make_fixnum(1024),
-                                             _lisp->rehashSize(),
-                                             _lisp->rehashThreshold());
-      DynamicScopeManager scope;
-      scope.pushSpecialVariableAndSet(_sym_STARcircle_counterSTAR, _lisp->_true());
-      scope.pushSpecialVariableAndSet(_sym_STARcircle_stackSTAR, hash);
-      write_object(x, _lisp->nullStream());
-      _sym_STARcircle_counterSTAR->setf_symbolValue(gc::make_tagged_fixnum<core::Fixnum_I>(0));
-      write_object(x, stream);
-      hash->clrhash();
-      goto OUTPUT;
-    }
-    code = search_print_circle(x);
-    if (!circle_counter.fixnump()) {
-      /* We are only inspecting the object to be printed. */
-      /* Only run X if it was not referenced before */
-      if (code != 0)
-        goto OUTPUT;
-    } else if (code == 0) {
-      /* Object is not referenced twice */
-    } else if (code < 0) {
-      /* Object is referenced twice. We print its definition */
-      stringstream ss;
-      ss << '#' << -code << '=';
-      Str_sp out = Str_O::create(ss.str());
-      clasp_writeString(out, stream);
-    } else {
-      /* Second reference to the object */
-      stringstream ss;
-      ss << '#' << code << '#';
-      Str_sp out = Str_O::create(ss.str());
-      clasp_writeString(out, stream);
-      goto OUTPUT;
-    }
-  }
-  return write_ugly_object(x, stream);
-OUTPUT:
-  return x;
+T_sp do_write_object(T_sp x, T_sp stream) {
+  return cl::_sym_printObject->fboundp() ? core::eval::funcall(cl::_sym_printObject, x, stream) : write_ugly_object(x, stream);
 }
 
-#define ARGS_af_writeObject "(obj &optional strm)"
-#define DECL_af_writeObject ""
-#define DOCS_af_writeObject "writeObject"
-T_sp af_writeObject(T_sp obj, T_sp ostrm) {
-  _G();
+T_sp do_write_object_circle(T_sp x, T_sp stream) {
+  T_sp circle_counter = _sym_STARcircle_counterSTAR->symbolValue();
+  Fixnum code = search_print_circle(x);
+
+  if (!circle_counter.fixnump()) {
+    /* We are only inspecting the object to be printed. */
+    /* Only run X if it was not referenced before */
+    if (code != 0)
+      return x;
+  } else if (code == 0) {
+    /* Object is not referenced twice */
+  } else if (code < 0) {
+    /* Object is referenced twice. We print its definition */
+    stringstream ss;
+    ss << '#' << -code << '=';
+    cl__write_string(SimpleBaseString_O::make(ss.str()), stream);
+  } else {
+    /* Second reference to the object */
+    stringstream ss;
+    ss << '#' << code << '#';
+    cl__write_string(SimpleBaseString_O::make(ss.str()), stream);
+    return x;
+  }
+
+  return do_write_object(x, stream);
+}
+
+T_sp write_object(T_sp x, T_sp stream) {
+  // With *print-pretty*, go immediately to the pretty printer, which does its own *print-circle* etc.
+  if (!cl::_sym_STARprint_prettySTAR.unboundp() && cl::_sym_STARprint_prettySTAR->boundP() &&
+      cl::_sym_STARprint_prettySTAR->symbolValue().notnilp()) {
+    T_mv mv_f = eval::funcall(cl::_sym_pprint_dispatch, x);
+    T_sp f0 = mv_f;
+    MultipleValues& mvn = core::lisp_multipleValues();
+    T_sp f1 = mvn.valueGet(1, mv_f.number_of_values());
+    if (f1.notnilp()) {
+      eval::funcall(f0, stream, x);
+      return x;
+    }
+  }
+
+  // Otherwise, check print circle stuff...
+  bool circle = clasp_print_circle();
+  // We only worry about *print-circle* for objects that aren't numbers, valists, characters,
+  // or interned symbols.
+  if (circle && (x) && !x.fixnump() && !x.valistp() && !x.characterp() && !cl__numberp(x) &&
+      (!cl__symbolp(x) || gc::As<Symbol_sp>(x)->homePackage().nilp())) {
+    T_sp circle_counter = _sym_STARcircle_counterSTAR->symbolValue();
+
+    if (circle_counter.nilp()) {
+      HashTable_sp hash = gc::As_unsafe<HashTable_sp>(
+          cl__make_hash_table(cl::_sym_eq, make_fixnum(1024), _lisp->rehashSize(), _lisp->rehashThreshold()));
+      DynamicScopeManager scope(_sym_STARcircle_counterSTAR, _lisp->_true());
+      DynamicScopeManager scope2(_sym_STARcircle_stackSTAR, hash);
+      do_write_object_circle(x, _lisp->nullStream());
+      _sym_STARcircle_counterSTAR->setf_symbolValue(gc::make_tagged_fixnum<core::Fixnum_I>(0));
+      return do_write_object_circle(x, stream);
+    }
+
+    return do_write_object_circle(x, stream);
+  }
+
+  return do_write_object(x, stream);
+}
+
+CL_LAMBDA(obj &optional strm);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(Identical to WRITE, but doesn't bind printer control variables.)dx");
+DOCGROUP(clasp);
+CL_DEFUN T_sp core__write_object(T_sp obj, T_sp ostrm) {
   T_sp strm = coerce::outputStreamDesignator(ostrm);
   return write_object(obj, strm);
 };
-
-void initialize_write_object() {
-  Defun(writeObject);
-}
-};
+}; // namespace core

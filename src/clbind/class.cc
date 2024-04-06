@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -53,8 +53,10 @@ THE SOFTWARE.
 #include <clasp/core/foundation.h>
 #include <clasp/core/package.h>
 #include <clasp/core/symbolTable.h>
-#include <clasp/core/str.h>
+#include <clasp/core/array.h>
 #include <clasp/clbind/config.h>
+#include <clasp/clbind/names.h>
+#include <clasp/clbind/function.h>
 #include <clasp/clbind/scope.h>
 #include <clasp/clbind/clbind_wrappers.h>
 #include <clasp/clbind/class.h>
@@ -69,38 +71,60 @@ THE SOFTWARE.
 namespace clbind {
 CLBIND_API detail::nil_type nil;
 default_constructor globalDefaultConstructorSignature;
+} // namespace clbind
+
+namespace clbind {
+void trapGetterMethoid() {
+  //    printf("%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__ );
 }
+}; // namespace clbind
 
 namespace clbind {
 namespace detail {
 
-class_registration::class_registration(const std::string &name) : m_default_constructor(NULL) {
-  m_name = name;
-}
+class_registration::class_registration(const std::string& name) : m_default_constructor(NULL) { m_name = name; }
 
 void class_registration::register_() const {
+  LOG_SCOPE(("%s:%d register_ %s/%s\n", __FILE__, __LINE__, this->kind().c_str(), this->name().c_str()));
   ClassRegistry_sp registry = ClassRegistry_O::get_registry();
-  clbind::ClassRep_sp crep = clbind::ClassRep_O::create(this->m_type, this->m_name, this->m_derivable);
+  clbind::ClassRep_sp crep;
+  size_t where = 0;
+#if 0
+  if (this->m_name=="DynTypedMatcher") {
+    printf("%s:%d setting up DynTypedMatcher\n", __FILE__, __LINE__ );
+  }
+#endif
   std::string classNameString(this->m_name);
-  core::Symbol_sp className = core::lispify_intern(classNameString, _lisp->getCurrentPackage()->packageName());
-  className->exportYourself();
-  crep->setName(className);
-  reg::lisp_associateClassIdWithClassSymbol(m_id, className); // TODO: Or do I want m_wrapper_id????
-  if (core::_sym_STARallCxxClassesSTAR->symbolValueUnsafe()) {
-    core::_sym_STARallCxxClassesSTAR->setf_symbolValue(
-        core::Cons_O::create(className, core::_sym_STARallCxxClassesSTAR->symbolValue()));
-  }
-  gctools::tagged_pointer<core::Creator> allocator;
-  if (m_default_constructor != NULL) {
-    allocator = m_default_constructor->registerDefaultConstructor_();
+  core::Symbol_sp className = core::lisp_intern(classNameString, _lisp->getCurrentPackage()->packageName());
+  if (!this->m_derivable) {
+    crep = clbind::ClassRep_O::create(core::lisp_clbind_cxx_class(), this->m_type, className, this->m_derivable);
+    where = gctools::Header_s::wrapped_wtag;
   } else {
-    allocator = gctools::ClassAllocator<DummyCreator>::allocateClass(classNameString);
+    crep = clbind::ClassRep_O::create(core::lisp_derivable_cxx_class(), this->m_type, className, this->m_derivable);
+    where = gctools::Header_s::derivable_wtag;
   }
-  _lisp->addClass(className, crep, allocator);
+  LOG_SCOPE(("%s:%d   Registering clbind class: %s\n", __FILE__, __LINE__, this->m_name.c_str()));
+  //  crep->_Class = core::lisp_standard_class();
+  crep->initializeSlots(crep->_Class->CLASS_stamp_for_instances() /* BEFORE: gctools::NextStamp() */,
+                        REF_CLASS_NUMBER_OF_SLOTS_IN_STANDARD_CLASS);
+  gctools::smart_ptr<core::Creator_O> creator;
+  if (m_default_constructor != NULL) {
+    creator = m_default_constructor->registerDefaultConstructor_();
+  } else {
+    core::SimpleFun_sp entryPoint =
+        core::makeSimpleFunAndFunctionDescription<DummyCreator_O>(::nil<core::T_O>());
+    creator = gctools::GC<DummyCreator_O>::allocate(entryPoint, className);
+  }
+  //  printf("%s:%d:%s  classNameString->%s  where -> 0x%zx\n", __FILE__, __LINE__, __FUNCTION__, classNameString.c_str(), where);
+  crep->initializeClassSlots(creator, gctools::NextClbindStampWtag(where));
+  className->exportYourself();
+  crep->_setClassName(className);
+  reg::lisp_associateClassIdWithClassSymbol(m_id, className); // TODO: Or do I want m_wrapper_id????
+  lisp_pushClassSymbolOntoSTARallCxxClassesSTAR(className);
+  core__setf_find_class(crep, className);
   registry->add_class(m_type, crep);
-
-  detail::class_map &classes = *globalClassMap;
-  classes.put(m_id, crep);
+  class_map_put(m_id, crep);
+  //  printf("%s:%d  step 2 with...  crep -> %s\n", __FILE__, __LINE__, _rep_(crep).c_str());
 
   bool const has_wrapper = m_wrapper_id != reg::registered_class<reg::null_type>::id;
 #if 0
@@ -110,49 +134,48 @@ void class_registration::register_() const {
                 printf("%s:%d:%s   class[%s] does not have wrapper\n", __FILE__,__LINE__,__FUNCTION__,m_name);
             }
 #endif
-  classes.put(m_wrapper_id, crep);
+  class_map_put(m_wrapper_id, crep);
 
   m_members.register_();
 
-  cast_graph *const casts = globalCastGraph;
-  class_id_map *const class_ids = globalClassIdMap;
+  cast_graph* const casts = globalCastGraph;
+  class_id_map* const class_ids = globalClassIdMap;
 
   class_ids->put(m_id, m_type);
   if (has_wrapper)
     class_ids->put(m_wrapper_id, m_wrapper_type);
 
-  BOOST_FOREACH (cast_entry const &e, m_casts) {
+  BOOST_FOREACH (cast_entry const& e, m_casts) {
     casts->insert(e.src, e.target, e.cast);
   }
 
   if (m_bases.size() == 0) {
     // If no base classes are specified then make T a base class from Common Lisp's point of view
     //
-    crep->addInstanceBaseClass(cl::_sym_T_O);
+    crep->addInstanceBaseClass(core::_sym_General_O);
+    crep->addInstanceAsSubClass(core::_sym_General_O);
   } else {
-    for (std::vector<base_desc>::iterator i = m_bases.begin();
-         i != m_bases.end(); ++i) {
+    for (std::vector<base_desc>::iterator i = m_bases.begin(); i != m_bases.end(); ++i) {
       //            CLBIND_CHECK_STACK(L);
 
       // the baseclass' class_rep structure
       ClassRep_sp bcrep = registry->find_class(i->first);
-      ASSERTF(bcrep.notnilp(), BF("Could not find base class %s") % i->first.name());
       // Add it to the DirectSuperClass list
-      crep->addInstanceBaseClass(bcrep->className());
+      crep->addInstanceBaseClass(bcrep->_className());
+      crep->addInstanceAsSubClass(bcrep->_className());
       crep->add_base_class(core::make_fixnum(0), bcrep);
     }
   }
+  //  printf("%s:%d  leaving with...  crep -> %s\n", __FILE__, __LINE__, _rep_(crep).c_str());
 }
 
 // -- interface ---------------------------------------------------------
 
-class_base::class_base(const string &name)
-    : scope(std::auto_ptr<registration>(
-          m_registration = new class_registration(name))) {
-}
+class_base::class_base(const string& name)
+    : scope_(std::unique_ptr<registration>(m_registration = new class_registration(name))), m_init_counter(0) {}
 
-void class_base::init(
-    type_id const &type_id_, class_id id, type_id const &wrapper_type, class_id wrapper_id, bool derivable) {
+void class_base::init(type_id const& type_id_, class_id id, type_id const& wrapper_type, class_id wrapper_id, bool derivable) {
+  //  printf("%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__ );
   m_registration->m_type = type_id_;
   m_registration->m_id = id;
   m_registration->m_wrapper_type = wrapper_type;
@@ -160,51 +183,44 @@ void class_base::init(
   m_registration->m_derivable = derivable;
 }
 
-void class_base::add_base(type_id const &base, cast_function cast) {
+void class_base::add_base(type_id const& base, cast_function cast) {
   m_registration->m_bases.push_back(std::make_pair(base, cast));
 }
 
-void class_base::set_default_constructor(registration *member) {
+void class_base::set_default_constructor(registration* member) {
   //            std::auto_ptr<registration> ptr(member);
   m_registration->m_default_constructor = member;
 }
 
-void class_base::add_member(registration *member) {
-  std::auto_ptr<registration> ptr(member);
-  m_registration->m_members.operator, (scope(ptr));
+void class_base::add_member(registration* member) {
+  std::unique_ptr<registration> ptr(member);
+  m_registration->m_members.operator,(scope_(std::move(ptr)));
 }
 
-void class_base::add_default_member(registration *member) {
-  std::auto_ptr<registration> ptr(member);
-  m_registration->m_default_members.operator, (scope(ptr));
+void class_base::add_default_member(registration* member) {
+  std::unique_ptr<registration> ptr(member);
+  m_registration->m_default_members.operator,(scope_(std::move(ptr)));
 }
 
-string class_base::name() const {
-  return m_registration->m_name;
-}
+string class_base::name() const { return m_registration->m_name; }
 
-void class_base::add_static_constant(const char *name, int val) {
-  m_registration->m_static_constants[name] = val;
-}
+void class_base::add_static_constant(const char* name, int val) { m_registration->m_static_constants[name] = val; }
 
-void class_base::add_inner_scope(scope &s) {
-  m_registration->m_scope.operator, (s);
-}
+void class_base::add_inner_scope(scope_& s) { m_registration->m_scope.operator,(s); }
 
-void class_base::add_cast(
-    class_id src, class_id target, cast_function cast) {
-  //            printf("%s:%d:%s   src[%lu] target[%lu]\n", __FILE__,__LINE__,__FUNCTION__,src,target);
+void class_base::add_cast(class_id src, class_id target, cast_function cast) {
+  //  printf("%s:%d:%s   src[%lu] target[%lu] cast=%p\n", __FILE__,__LINE__,__FUNCTION__,src,target,(void*)cast);
   m_registration->m_casts.push_back(cast_entry(src, target, cast));
 }
 
-void add_custom_name(type_id const &i, std::string &s) {
+void add_custom_name(type_id const& i, std::string& s) {
   s += " [";
   s += i.name();
   s += "]";
 }
 
-std::string get_class_name(core::Lisp_sp L, type_id const &i) {
-  IMPLEMENT_MEF(BF("get_class_name"));
+std::string get_class_name(core::LispPtr L, type_id const& i) {
+  IMPLEMENT_MEF("get_class_name");
 #if 0  // start_meister_disabled
             std::string ret;
 
@@ -241,6 +257,6 @@ std::string get_class_name(core::Lisp_sp L, type_id const &i) {
             return ret;
 #endif // end_meister_disabled
 }
-}
+} // namespace detail
 
-} // namespace clbind::detail
+} // namespace clbind

@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: smallMap.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -29,15 +30,12 @@ THE SOFTWARE.
 // (C) 2004 Christian E. Schafmeister
 //
 
-#ifndef SmallMap_H
-#define SmallMap_H
 #include <stdio.h>
 #include <string>
 #include <vector>
 #include <set>
-#include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
-#include <clasp/core/lispVector.h>
+#include <clasp/core/array.h>
 #include <clasp/core/hashTableEq.h>
 #include <clasp/core/cons.h>
 #include <clasp/core/corePackage.fwd.h>
@@ -45,22 +43,27 @@ THE SOFTWARE.
 namespace core {
 using namespace core;
 SMART(SmallMap);
-class SmallMap_O : public T_O {
-  LISP_BASE1(T_O);
-  LISP_CLASS(core, CorePkg, SmallMap_O, "SmallMap");
-GCPRIVATE:
+class SmallMap_O : public General_O {
+  LISP_CLASS(core, CorePkg, SmallMap_O, "SmallMap", General_O);
+
+private:
   typedef gctools::SmallMap<T_sp, T_sp> map_type;
   map_type map;
 
 public:
+  bool fieldsp() const { return true; };
+  void fields(Record_sp node);
+
+public:
   T_sp find(T_sp key, T_sp defval);
+  T_sp findEqual(T_sp key, T_sp defval);
   void setf(T_sp key, T_sp val);
-  int size() const { return this->map.size(); };
-  int capacity() const { return this->map.capacity(); };
+  void setfEqual(T_sp key, T_sp val);
+  CL_LISPIFY_NAME("map_size");
+  CL_DEFMETHOD int size() const { return this->map.size(); };
+  CL_LISPIFY_NAME("map_capacity");
+  CL_DEFMETHOD int capacity() const { return this->map.capacity(); };
 
   DEFAULT_CTOR_DTOR(SmallMap_O);
 };
-};
-
-TRANSLATE(core::SmallMap_O);
-#endif
+}; // namespace core

@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -50,341 +50,350 @@ THE SOFTWARE.
 #endif
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
-#include <clasp/core/str.h>
+#include <clasp/core/array.h>
 #include <clasp/core/symbolTable.h>
 #include <clasp/core/lispStream.h>
 #include <clasp/core/evaluator.h>
-#include <clasp/core/lispVector.h>
 #include <clasp/sockets/socketsPackage.h>
-#include <clasp/sockets/symbolTable.h>
+#include <clasp/core/symbolTable.h>
 #include <clasp/core/wrappers.h>
 
 namespace sockets {
 
 #define REINTERPRET_CAST(t, c) reinterpret_cast<t>(c)
 
-using namespace core;
-
-static void *
-safe_buffer_pointer(core::T_sp x, uint size) {
+static void* safe_buffer_pointer(core::T_sp x, uint size) {
   bool ok = false;
-  void *address;
-  if (Str_sp str = x.asOrNull<Str_O>()) {
-    ok = (size <= str->dimension());
-    address = str->addressOfBuffer();
-  } else if (Vector_sp vec = x.asOrNull<Vector_O>()) {
+  void* address;
+  if (core::Str8Ns_sp str = x.asOrNull<core::Str8Ns_O>()) {
+    ok = (size <= str->arrayTotalSize());
+    address = (void*)&(*str)[0]; // str->addressOfBuffer();
+  } else if (core::SimpleBaseString_sp strb = x.asOrNull<core::SimpleBaseString_O>()) {
+    ok = (size <= strb->arrayTotalSize());
+    address = (void*)&(*strb)[0]; // str->addressOfBuffer();
+  } else if (core::ComplexVector_T_sp vec = x.asOrNull<core::ComplexVector_T_O>()) {
     int divisor = vec->elementSizeInBytes();
     size = (size + divisor - 1) / divisor;
-    ok = (size <= vec->dimension());
-    address = vec->addressOfBuffer();
+    ok = (size <= vec->arrayTotalSize());
+    address = &(*vec)[0];
+  } else if (core::SimpleVector_byte8_t_sp svb8 = x.asOrNull<core::SimpleVector_byte8_t_O>()) {
+    ok = (size <= svb8->arrayTotalSize());
+    address = svb8->rowMajorAddressOfElement_(0);
+  } else {
+    SIMPLE_ERROR("Add support for buffer {}", _rep_(x));
   }
   if (!ok) {
-    SIMPLE_ERROR(BF("Lisp object does not have enough space to be a valid socket buffer: %s") % _rep_(x));
+    SIMPLE_ERROR("Lisp object does not have enough space to be a valid socket buffer: {}", _rep_(x));
   }
   return address;
 }
 
-static void fill_inet_sockaddr(struct sockaddr_in *sockaddr, int port,
-                               int a1, int a2, int a3, int a4) {
+static void fill_inet_sockaddr(struct sockaddr_in* sockaddr, int port, int a1, int a2, int a3, int a4) {
   bzero(sockaddr, sizeof(struct sockaddr_in));
   sockaddr->sin_family = AF_INET;
   sockaddr->sin_port = htons(port);
   sockaddr->sin_addr.s_addr = htonl((uint32_t)a1 << 24 | (uint32_t)a2 << 16 | (uint32_t)a3 << 8 | (uint32_t)a4);
 }
 
-#define ARGS_af_ff_socket "(domain type protocol)"
-#define DECL_af_ff_socket ""
-#define DOCS_af_ff_socket "ff_socket"
-int af_ff_socket(int domain, int type, int protocol) {
-  _G();
-  return ::socket(domain, type, protocol);
-};
+CL_LAMBDA(domain type protocol);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ff_socket)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ff_socket(int domain, int type, int protocol) { return ::socket(domain, type, protocol); };
 
-#define ARGS_af_ff_listen "(sockfd backlog)"
-#define DECL_af_ff_listen ""
-#define DOCS_af_ff_listen "ff_listen"
-int af_ff_listen(int sockfd, int backlog) {
-  _G();
-  return ::listen(sockfd, backlog);
-};
+CL_LAMBDA(sockfd backlog);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ff_listen)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ff_listen(int sockfd, int backlog) { return ::listen(sockfd, backlog); };
 
-#define ARGS_af_ff_close "(filedes)"
-#define DECL_af_ff_close ""
-#define DOCS_af_ff_close "ff_close"
-int af_ff_close(int filedes) {
-  _G();
-  return ::close(filedes);
-};
+CL_LAMBDA(filedes);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ff_close)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ff_close(int filedes) { return ::close(filedes); };
 
-#define ARGS_af_funcName "(arg)"
-#define DECL_af_funcName ""
-#define DOCS_af_funcName "funcName"
-T_mv af_funcName() {
-  _G();
-  IMPLEMENT_MEF(BF("Implement funcName"));
-};
+CL_LAMBDA(arg);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(funcName)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_mv sockets_internal__funcName() { IMPLEMENT_MEF("Implement funcName"); };
 
-#define ARGS_af_ll_socket_errno "()"
-#define DECL_af_ll_socket_errno ""
-#define DOCS_af_ll_socket_errno "ll_socket_errno"
-int af_ll_socket_errno() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socket_errno)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socket_errno() {
   /* Return the value of global variable errno */
   return errno;
 };
 
-#define ARGS_af_ll_get_name_service_h_errno "()"
-#define DECL_af_ll_get_name_service_h_errno ""
-#define DOCS_af_ll_get_name_service_h_errno "ll_get_name_service_h_errno"
-int af_ll_get_name_service_h_errno() {
-  _G();
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_get_name_service_h_errno)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_get_name_service_h_errno() {
   /* Return the value of global variable h_errno */
   return h_errno;
 };
 
-#define ARGS_af_ll_getNameServiceErrorMessage "(num)"
-#define DECL_af_ll_getNameServiceErrorMessage ""
-#define DOCS_af_ll_getNameServiceErrorMessage "ll_getNameServiceErrorMessage"
-Str_sp af_ll_getNameServiceErrorMessage(int num) {
-  _G();
-  return Str_O::create(strerror(num));
+CL_LAMBDA(num);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getNameServiceErrorMessage)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::String_sp sockets_internal__ll_getNameServiceErrorMessage(int num) {
+  return core::SimpleBaseString_O::make(strerror(num));
 };
 
-#define ARGS_af_ll_getHostByName "(host-name host-ent setf_host_ent_name setf_host_ent_aliases setf_host_ent_address_type setf_host_ent_addresses)"
-#define DECL_af_ll_getHostByName ""
-#define DOCS_af_ll_getHostByName "ll_getHostByName"
-T_sp af_ll_getHostByName(const string &hostName,                 // #0
-                         T_sp tHostEnt,                          // #1
-                         Function_sp setf_host_ent_name,         // #2
-                         Function_sp setf_host_ent_aliases,      // #3
-                         Function_sp setf_host_ent_address_type, // #4
-                         Function_sp setf_host_ent_addresses)    // #5
+CL_LAMBDA(host-name host-ent setf-host-ent-name setf-host-ent-aliases setf-host-ent-address-type setf-host-ent-addresses);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getHostByName)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__ll_getHostByName(const string& hostName,                       // #0
+                                                       core::T_sp tHostEnt,                          // #1
+                                                       core::Function_sp setf_host_ent_name,         // #2
+                                                       core::Function_sp setf_host_ent_aliases,      // #3
+                                                       core::Function_sp setf_host_ent_address_type, // #4
+                                                       core::Function_sp setf_host_ent_addresses)    // #5
 {
-  _G();
-  struct hostent *hostent = gethostbyname(hostName.c_str());
+  struct hostent* hostent = gethostbyname(hostName.c_str());
+  if (!hostent)
+    return nil<core::T_O>();
   if (tHostEnt.notnilp()) {
-    char **aliases;
-    char **addrs;
-    T_sp aliases_list = _Nil<core::T_O>();
-    T_sp addr_list = _Nil<core::T_O>();
+    char** aliases;
+    char** addrs;
+    core::T_sp aliases_list = nil<core::T_O>();
+    core::T_sp addr_list = nil<core::T_O>();
     int length = hostent->h_length;
-    eval::funcall(setf_host_ent_name, Str_O::create(hostent->h_name), tHostEnt);
-    eval::funcall(/*#4*/ setf_host_ent_address_type, Integer_O::create((gc::Fixnum)hostent->h_addrtype), tHostEnt);
+    core::eval::funcall(setf_host_ent_name, core::SimpleBaseString_O::make(hostent->h_name), tHostEnt);
+    core::eval::funcall(/*#4*/ setf_host_ent_address_type, core::Integer_O::create((gc::Fixnum)hostent->h_addrtype), tHostEnt);
 
     for (aliases = hostent->h_aliases; *aliases != NULL; aliases++) {
-      aliases_list = Cons_O::create(Str_O::create(*aliases), aliases_list);
+      aliases_list = core::Cons_O::create(core::SimpleBaseString_O::make(*aliases), aliases_list);
     }
-    eval::funcall(/*#3*/ setf_host_ent_aliases, aliases_list, tHostEnt);
+    core::eval::funcall(/*#3*/ setf_host_ent_aliases, aliases_list, tHostEnt);
 
     for (addrs = hostent->h_addr_list; *addrs != NULL; addrs++) {
       int pos;
-      Vector_sp vector = gc::As<Vector_sp>(eval::funcall(cl::_sym_makeArray, make_fixnum(length)));
+      core::Vector_sp vector = gc::As<core::Vector_sp>(core::eval::funcall(cl::_sym_makeArray, core::make_fixnum(length)));
       for (pos = 0; pos < length; pos++)
-        vector->operator[](pos) = make_fixnum((unsigned char)((*addrs)[pos]));
-      addr_list = Cons_O::create(vector, addr_list);
+        vector->rowMajorAset(pos, core::make_fixnum((unsigned char)((*addrs)[pos])));
+      addr_list = core::Cons_O::create(vector, addr_list);
     }
-    eval::funcall(/*#5*/ setf_host_ent_addresses, addr_list, /*#1*/ tHostEnt);
+    core::eval::funcall(/*#5*/ setf_host_ent_addresses, addr_list, /*#1*/ tHostEnt);
     /* @(return) = #1; */
     return tHostEnt;
   } else {
-    /* @(return) = _Nil<core::T_O>(); */
-    return _Nil<T_O>();
+    /* @(return) = nil<core::T_O>(); */
+    return nil<core::T_O>();
   }
 }
 
-#define ARGS_af_ll_getHostByAddress "(address host-ent stf_host_ent_name setf_host_ent_aliases setf_host_ent_address_type setf_host_ent_addresses)"
-#define DECL_af_ll_getHostByAddress ""
-#define DOCS_af_ll_getHostByAddress "ll_getHostByAddress"
-T_sp af_ll_getHostByAddress(Vector_sp address,               //#0
-                            T_sp tHostEnt,                   //#1
-                            T_sp setf_host_ent_name,         //#2
-                            T_sp setf_host_ent_aliases,      //#3
-                            T_sp setf_host_ent_address_type, //#4
-                            T_sp setf_host_ent_addresses)    //#5
+CL_LAMBDA(address host-ent stf-host-ent-name setf-host-ent-aliases setf-host-ent-address-type setf-host-ent-addresses);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getHostByAddress)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__ll_getHostByAddress(core::Vector_sp address,               // #0
+                                                          core::T_sp tHostEnt,                   // #1
+                                                          core::T_sp setf_host_ent_name,         // #2
+                                                          core::T_sp setf_host_ent_aliases,      // #3
+                                                          core::T_sp setf_host_ent_address_type, // #4
+                                                          core::T_sp setf_host_ent_addresses)    // #5
 {
-  _G();
   unsigned char vector[4];
-  struct hostent *hostent;
-  vector[0] = unbox_fixnum(gc::As<Fixnum_sp>(address->operator[](0)));
-  vector[1] = unbox_fixnum(gc::As<Fixnum_sp>(address->operator[](1)));
-  vector[2] = unbox_fixnum(gc::As<Fixnum_sp>(address->operator[](2)));
-  vector[3] = unbox_fixnum(gc::As<Fixnum_sp>(address->operator[](3)));
+  struct hostent* hostent;
+  vector[0] = unbox_fixnum(gc::As<core::Fixnum_sp>(address->rowMajorAref(0)));
+  vector[1] = unbox_fixnum(gc::As<core::Fixnum_sp>(address->rowMajorAref(1)));
+  vector[2] = unbox_fixnum(gc::As<core::Fixnum_sp>(address->rowMajorAref(2)));
+  vector[3] = unbox_fixnum(gc::As<core::Fixnum_sp>(address->rowMajorAref(3)));
   clasp_disable_interrupts();
-  hostent = gethostbyaddr(REINTERPRET_CAST(const char *, vector), 4, AF_INET);
+  hostent = gethostbyaddr(REINTERPRET_CAST(const char*, vector), 4, AF_INET);
   clasp_enable_interrupts();
   if (hostent != NULL) {
-    char **aliases;
-    char **addrs;
-    T_sp aliases_list = _Nil<core::T_O>();
-    T_sp addr_list = _Nil<core::T_O>();
+    char** aliases;
+    char** addrs;
+    core::T_sp aliases_list = nil<core::T_O>();
+    core::T_sp addr_list = nil<core::T_O>();
     int length = hostent->h_length;
 
-    eval::funcall(/*#2*/ setf_host_ent_name, Str_O::create(hostent->h_name), tHostEnt);
-    eval::funcall(/*#4*/ setf_host_ent_address_type, Integer_O::create((gc::Fixnum)hostent->h_addrtype), tHostEnt);
+    core::eval::funcall(/*#2*/ setf_host_ent_name, core::SimpleBaseString_O::make(hostent->h_name), tHostEnt);
+    core::eval::funcall(/*#4*/ setf_host_ent_address_type, core::Integer_O::create((gc::Fixnum)hostent->h_addrtype), tHostEnt);
 
     for (aliases = hostent->h_aliases; *aliases != NULL; aliases++) {
-      aliases_list = Cons_O::create(Str_O::create(*aliases), aliases_list);
+      aliases_list = core::Cons_O::create(core::SimpleBaseString_O::make(*aliases), aliases_list);
     }
-    eval::funcall(/*#3*/ setf_host_ent_aliases, aliases_list, tHostEnt);
+    core::eval::funcall(/*#3*/ setf_host_ent_aliases, aliases_list, tHostEnt);
 
     for (addrs = hostent->h_addr_list; *addrs != NULL; addrs++) {
       int pos;
-      Vector_sp vector = gc::As<Vector_sp>(eval::funcall(cl::_sym_makeArray, make_fixnum(length)));
+      core::Vector_sp vector = gc::As<core::Vector_sp>(core::eval::funcall(cl::_sym_makeArray, core::make_fixnum(length)));
       for (pos = 0; pos < length; pos++)
-        vector->setf_elt(pos, make_fixnum((unsigned char)((*addrs)[pos])));
-      addr_list = Cons_O::create(vector, addr_list);
+        vector->rowMajorAset(pos, core::make_fixnum((unsigned char)((*addrs)[pos])));
+      addr_list = core::Cons_O::create(vector, addr_list);
     }
-    eval::funcall(/*#5*/ setf_host_ent_addresses, addr_list, tHostEnt);
+    core::eval::funcall(/*#5*/ setf_host_ent_addresses, addr_list, tHostEnt);
     return tHostEnt;
     /* @(return) = #1; */
   } else {
-    return _Nil<core::T_O>();
-    /* @(return) = _Nil<core::T_O>(); */
+    return nil<core::T_O>();
+    /* @(return) = nil<core::T_O>(); */
   }
 }
 
-#define ARGS_af_ll_socketReceive "(fd buffer length oob peek waitall)"
-#define DECL_af_ll_socketReceive ""
-#define DOCS_af_ll_socketReceive "ll_socketReceive"
-T_mv af_ll_socketReceive(int fd,       // #0
-                         T_sp buffer,  // #1
-                         int length,   // #2
-                         bool oob,     // #3
-                         bool peek,    // #4
-                         bool waitall) // #5
+CL_LAMBDA(fd buffer length oob peek waitall);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketReceive)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_mv sockets_internal__ll_socketReceive(int fd,            // #0
+                                                       core::T_sp buffer, // #1
+                                                       int length,        // #2
+                                                       bool oob,          // #3
+                                                       bool peek,         // #4
+                                                       bool waitall)      // #5
 {
-  _G();
-  int flags = (oob ? MSG_OOB : 0) |
-              (peek ? MSG_PEEK : 0) |
-              (waitall ? MSG_WAITALL : 0);
-  ssize_t len;
+  int flags = (oob ? MSG_OOB : 0) | (peek ? MSG_PEEK : 0) | (waitall ? MSG_WAITALL : 0);
+  cl_index len;
+  struct sockaddr_in name;
+  socklen_t addr_len = (socklen_t)sizeof(struct sockaddr_in);
   clasp_disable_interrupts();
-  len = recvfrom(fd, REINTERPRET_CAST(char *, safe_buffer_pointer(buffer, length)), length, flags, NULL, NULL);
+  len =
+      recvfrom(fd, REINTERPRET_CAST(char*, safe_buffer_pointer(buffer, length)), length, flags, (struct sockaddr*)&name, &addr_len);
   clasp_enable_interrupts();
-  if (len >= 0) {
-    if (Vector_sp vec = gc::As<Vector_sp>(buffer)) {
-      vec->setFillPointer(len);
-    } else {
-      SIMPLE_ERROR(BF("Vector must have fill pointer to be socket buffer: %s") % _rep_(vec));
-    }
+  unlikely_if(len == -1) return Values(core::make_fixnum(-1), core::make_fixnum(errno));
+  else {
+    uint32_t ip = ntohl(name.sin_addr.s_addr);
+    uint16_t port = ntohs(name.sin_port);
+    core::Vector_sp vector = gc::As<core::Vector_sp>(core::eval::funcall(cl::_sym_makeArray, core::make_fixnum(4)));
+    vector->rowMajorAset(0, core::make_fixnum(ip >> 24));
+    vector->rowMajorAset(1, core::make_fixnum((ip >> 16) & 0xFF));
+    vector->rowMajorAset(2, core::make_fixnum((ip >> 8) & 0xFF));
+    vector->rowMajorAset(3, core::make_fixnum(ip & 0xFF));
+    return Values(core::make_fixnum(len), core::make_fixnum(errno), vector, core::make_fixnum(port));
   }
-  return Values(make_fixnum(len), make_fixnum(errno));
 }
 
-#define ARGS_af_ll_getProtocolByName "(name)"
-#define DECL_af_ll_getProtocolByName ""
-#define DOCS_af_ll_getProtocolByName "ll_getProtocolByName"
-int af_ll_getProtocolByName(const string &name) {
-  return getprotobyname(name.c_str())->p_proto;
+CL_LAMBDA(name);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getProtocolByName)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_getProtocolByName(const string& name) {
+  struct protoent* proto = getprotobyname(name.c_str());
+
+  if (proto == NULL) {
+    SIMPLE_ERROR("Unknown protocol %s passed to sockets:ll-get-protocol-by-name", name.c_str());
+  }
+
+  return proto->p_proto;
 }
 
-#define ARGS_af_ll_socketBind_inetSocket "(port ip0 ip1 ip2 ip3 socketFileDescriptor)"
-#define DECL_af_ll_socketBind_inetSocket ""
-#define DOCS_af_ll_socketBind_inetSocket "ll_socketBind - returns output"
-int af_ll_socketBind_inetSocket(int port, int ip0, int ip1, int ip2, int ip3, int socketFileDescriptor) {
-  _G();
+CL_LAMBDA(port ip0 ip1 ip2 ip3 socketFileDescriptor);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketBind - returns output)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketBind_inetSocket(int port, int ip0, int ip1, int ip2, int ip3, int socketFileDescriptor) {
   struct sockaddr_in sockaddr;
   int output;
   clasp_disable_interrupts();
   fill_inet_sockaddr(&sockaddr, port, ip0, ip1, ip2, ip3);
-  output = ::bind(socketFileDescriptor, (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
+  output = ::bind(socketFileDescriptor, (struct sockaddr*)&sockaddr, sizeof(struct sockaddr_in));
   clasp_enable_interrupts();
   return output;
 }
 
-#define ARGS_af_ll_socketAccept_inetSocket "(sfd)"
-#define DECL_af_ll_socketAccept_inetSocket ""
-#define DOCS_af_ll_socketAccept_inetSocket "ll_socketAccept_inetSocket"
-T_mv af_ll_socketAccept_inetSocket(int sfd) {
-  _G();
+CL_LAMBDA(sfd);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketAccept_inetSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_mv sockets_internal__ll_socketAccept_inetSocket(int sfd) {
   struct sockaddr_in sockaddr;
   socklen_t addr_len = (socklen_t)sizeof(struct sockaddr_in);
   int new_fd;
 
   clasp_disable_interrupts();
-  new_fd = accept(sfd, (struct sockaddr *)&sockaddr, &addr_len);
+  new_fd = accept(sfd, (struct sockaddr*)&sockaddr, &addr_len);
   clasp_enable_interrupts();
 
   int return0 = new_fd;
-  core::T_sp return1 = _Nil<core::T_O>();
+  core::T_sp return1 = nil<core::T_O>();
   int return2 = 0;
   if (new_fd != -1) {
     uint32_t ip = ntohl(sockaddr.sin_addr.s_addr);
     uint16_t port = ntohs(sockaddr.sin_port);
-    Vector_sp vector = gc::As<Vector_sp>(eval::funcall(cl::_sym_makeArray, make_fixnum(4)));
-    vector->setf_elt(0, make_fixnum(ip >> 24));
-    vector->setf_elt(1, make_fixnum((ip >> 16) & 0xFF));
-    vector->setf_elt(2, make_fixnum((ip >> 8) & 0xFF));
-    vector->setf_elt(3, make_fixnum(ip & 0xFF));
+    core::Vector_sp vector = gc::As<core::Vector_sp>(core::eval::funcall(cl::_sym_makeArray, core::make_fixnum(4)));
+    vector->rowMajorAset(0, core::make_fixnum(ip >> 24));
+    vector->rowMajorAset(1, core::make_fixnum((ip >> 16) & 0xFF));
+    vector->rowMajorAset(2, core::make_fixnum((ip >> 8) & 0xFF));
+    vector->rowMajorAset(3, core::make_fixnum(ip & 0xFF));
     return1 = vector;
     return2 = port;
   }
-  return Values(Integer_O::create((gc::Fixnum)return0), return1, Integer_O::create((gc::Fixnum)return2));
+  return Values(core::Integer_O::create((gc::Fixnum)return0), return1, core::Integer_O::create((gc::Fixnum)return2));
 }
 
-#define ARGS_af_ll_socketConnect_inetSocket "(port ip0 ip1 ip2 ip3 socket-file-descriptor)"
-#define DECL_af_ll_socketConnect_inetSocket ""
-#define DOCS_af_ll_socketConnect_inetSocket "ll_socketConnect_inetSocket"
-int af_ll_socketConnect_inetSocket(int port, int ip0, int ip1, int ip2, int ip3, int socket_file_descriptor) {
-  _G();
+CL_LAMBDA(port ip0 ip1 ip2 ip3 socket-file-descriptor);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketConnect_inetSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketConnect_inetSocket(int port, int ip0, int ip1, int ip2, int ip3,
+                                                           int socket_file_descriptor) {
   struct sockaddr_in sockaddr;
   int output;
   clasp_disable_interrupts();
   fill_inet_sockaddr(&sockaddr, port, ip0, ip1, ip2, ip3);
-  output = connect(socket_file_descriptor, (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_in));
+  output = connect(socket_file_descriptor, (struct sockaddr*)&sockaddr, sizeof(struct sockaddr_in));
   clasp_enable_interrupts();
   return output;
 }
 
-#define ARGS_af_ll_socketPeername_inetSocket "(fd vector)"
-#define DECL_af_ll_socketPeername_inetSocket ""
-#define DOCS_af_ll_socketPeername_inetSocket "ll_socketPeername_inetSocket"
-int af_ll_socketPeername_inetSocket(int fd, Vector_sp vector) {
-  _G();
+CL_LAMBDA(fd vector);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketPeername_inetSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketPeername_inetSocket(int fd, core::Vector_sp vector) {
   /* @01; */
   struct sockaddr_in name;
   socklen_t len = sizeof(struct sockaddr_in);
   int ret;
   clasp_disable_interrupts();
-  ret = getpeername(fd, (struct sockaddr *)&name, &len);
+  ret = getpeername(fd, (struct sockaddr*)&name, &len);
   clasp_enable_interrupts();
 
   if (ret == 0) {
     uint32_t ip = ntohl(name.sin_addr.s_addr);
     uint16_t port = ntohs(name.sin_port);
 
-    vector->setf_elt(0, make_fixnum(ip >> 24));
-    vector->setf_elt(1, make_fixnum((ip >> 16) & 0xFF));
-    vector->setf_elt(2, make_fixnum((ip >> 8) & 0xFF));
-    vector->setf_elt(3, make_fixnum(ip & 0xFF));
+    vector->rowMajorAset(0, core::make_fixnum(ip >> 24));
+    vector->rowMajorAset(1, core::make_fixnum((ip >> 16) & 0xFF));
+    vector->rowMajorAset(2, core::make_fixnum((ip >> 8) & 0xFF));
+    vector->rowMajorAset(3, core::make_fixnum(ip & 0xFF));
     return port;
   } else {
     return -1;
   }
 }
 
-#define ARGS_af_ll_socketName "(fd vector)"
-#define DECL_af_ll_socketName ""
-#define DOCS_af_ll_socketName "ll_socketName"
-int af_ll_socketName(int fd, Vector_sp vector) {
-  _G();
+CL_LAMBDA(fd vector);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketName)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketName(int fd, core::Vector_sp vector) {
   /* @01 */
   struct sockaddr_in name;
   socklen_t len = sizeof(struct sockaddr_in);
   int ret;
 
   clasp_disable_interrupts();
-  ret = getsockname(fd, (struct sockaddr *)&name, &len);
+  ret = getsockname(fd, (struct sockaddr*)&name, &len);
   clasp_enable_interrupts();
 
   if (ret == 0) {
     uint32_t ip = ntohl(name.sin_addr.s_addr);
     uint16_t port = ntohs(name.sin_port);
 
-    vector->setf_elt(0, make_fixnum(ip >> 24));
-    vector->setf_elt(1, make_fixnum((ip >> 16) & 0xFF));
-    vector->setf_elt(2, make_fixnum((ip >> 8) & 0xFF));
-    vector->setf_elt(3, make_fixnum(ip & 0xFF));
+    vector->rowMajorAset(0, core::make_fixnum(ip >> 24));
+    vector->rowMajorAset(1, core::make_fixnum((ip >> 16) & 0xFF));
+    vector->rowMajorAset(2, core::make_fixnum((ip >> 8) & 0xFF));
+    vector->rowMajorAset(3, core::make_fixnum(ip & 0xFF));
 
     return port;
   } else {
@@ -392,45 +401,41 @@ int af_ll_socketName(int fd, Vector_sp vector) {
   }
 }
 
-#define ARGS_af_ll_socketSendAddress "(arg)"
-#define DECL_af_ll_socketSendAddress ""
-#define DOCS_af_ll_socketSendAddress "ll_socketSendAddress"
-Integer_sp af_ll_socketSendAddress(int fd,            //#0
-                                   Vector_sp vbuffer, //#1
-                                   int length,        //#2
-                                   int secondAddress, //#3
-                                   int ip0,           //#4
-                                   int ip1,           //#5
-                                   int ip2,           //#6
-                                   int ip3,           //#7
-                                   bool oob,          //#8
-                                   bool eor,          //#9
-                                   bool dontroute,    //#a
-                                   bool dontwait,     //#b
-                                   bool nosignal,     //#c
-                                   bool confirm)      //#d
+CL_LAMBDA(fd vbuffer length secondAddress ip0 ip1 ip2 ip3 oob eor dontroute dontwait nosignal confirm);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketSendAddress)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::Integer_sp sockets_internal__ll_socketSendAddress(int fd,                  // #0
+                                                                 core::Vector_sp vbuffer, // #1
+                                                                 int length,              // #2
+                                                                 int secondAddress,       // #3
+                                                                 int ip0,                 // #4
+                                                                 int ip1,                 // #5
+                                                                 int ip2,                 // #6
+                                                                 int ip3,                 // #7
+                                                                 bool oob,                // #8
+                                                                 bool eor,                // #9
+                                                                 bool dontroute,          // #a
+                                                                 bool dontwait,           // #b
+                                                                 bool nosignal,           // #c
+                                                                 bool confirm)            // #d
 {
-  _G();
-  /*		 (c-inline (fd buffer length 
-		 (second address)
-		 (aref (first address) 0)
-		 (aref (first address) 1)
-		 (aref (first address) 2)
-		 (aref (first address) 3)
-		 oob eor dontroute dontwait nosignal confirm)
-		 (:int :object :int
-		 :int :int :int :int :int
-		 :bool :bool :bool :bool :bool :bool)
-		 :long
+  /*		 (c-inline (fd buffer length
+                 (second address)
+                 (aref (first address) 0)
+                 (aref (first address) 1)
+                 (aref (first address) 2)
+                 (aref (first address) 3)
+                 oob eor dontroute dontwait nosignal confirm)
+                 (:int :object :int
+                 :int :int :int :int :int
+                 :bool :bool :bool :bool :bool :bool)
+                 :long
 */
   int sock = fd;
-  void *buffer = safe_buffer_pointer(vbuffer, length);
-  int flags = (oob ? MSG_OOB : 0) |
-              (eor ? MSG_EOR : 0) |
-              (dontroute ? MSG_DONTROUTE : 0) |
-              (dontwait ? MSG_DONTWAIT : 0) |
-              (nosignal ? MSG_NOSIGNAL : 0) |
-              (confirm ? MSG_CONFIRM : 0);
+  void* buffer = safe_buffer_pointer(vbuffer, length);
+  int flags = (oob ? MSG_OOB : 0) | (eor ? MSG_EOR : 0) | (dontroute ? MSG_DONTROUTE : 0) | (dontwait ? MSG_DONTWAIT : 0) |
+              (nosignal ? MSG_NOSIGNAL : 0) | (confirm ? MSG_CONFIRM : 0);
   //    cl_type type = type_of(#1);
   struct sockaddr_in sockaddr;
   ssize_t len;
@@ -440,60 +445,50 @@ Integer_sp af_ll_socketSendAddress(int fd,            //#0
 #if (MSG_NOSIGNAL == 0) && defined(SO_NOSIGPIPE)
   {
     int sockopt = nosignal;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE,
-               REINTERPRET_CAST(char *, &sockopt),
-               sizeof(int));
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, REINTERPRET_CAST(char*, &sockopt), sizeof(int));
   }
 #endif
-  len = sendto(sock, REINTERPRET_CAST(char *, buffer),
-               length, flags, (struct sockaddr *)&sockaddr,
-               sizeof(struct sockaddr_in));
+  len = sendto(sock, REINTERPRET_CAST(char*, buffer), length, flags, (struct sockaddr*)&sockaddr, sizeof(struct sockaddr_in));
   clasp_enable_interrupts();
-  return Integer_O::create((gc::Fixnum)(len));
+  return core::Integer_O::create((gc::Fixnum)(len));
 }
 
-#define ARGS_af_socketSendNoAddress "(fb buffer length oob eor dontroute dontwait nosignal confirm)"
-#define DECL_af_socketSendNoAddress ""
-#define DOCS_af_socketSendNoAddress "socketSendNoAddress"
-Integer_sp af_socketSendNoAddress(int fb,            //#0
-                                  Vector_sp vbuffer, //#1
-                                  int length,        //#2
-                                  bool oob,          //#3
-                                  bool eor,          //#4
-                                  bool dontroute,    //#5
-                                  bool dontwait,     //#6
-                                  bool nosignal,     //#7
-                                  bool confirm       //#8
-                                  ) {
-  _G();
+CL_LAMBDA(fb buffer length oob eor dontroute dontwait nosignal confirm);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketSendNoAddress)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::Integer_sp sockets_internal__ll_socketSendNoAddress(int fb,                  // #0
+                                                                   core::Vector_sp vbuffer, // #1
+                                                                   int length,              // #2
+                                                                   bool oob,                // #3
+                                                                   bool eor,                // #4
+                                                                   bool dontroute,          // #5
+                                                                   bool dontwait,           // #6
+                                                                   bool nosignal,           // #7
+                                                                   bool confirm             // #8
+) {
   int sock = fb;
-  void *buffer = safe_buffer_pointer(vbuffer, length);
-  int flags = (oob ? MSG_OOB : 0) |
-              (eor ? MSG_EOR : 0) |
-              (dontroute ? MSG_DONTROUTE : 0) |
-              (dontwait ? MSG_DONTWAIT : 0) |
-              (nosignal ? MSG_NOSIGNAL : 0) |
-              (confirm ? MSG_CONFIRM : 0);
+  void* buffer = safe_buffer_pointer(vbuffer, length);
+  int flags = (oob ? MSG_OOB : 0) | (eor ? MSG_EOR : 0) | (dontroute ? MSG_DONTROUTE : 0) | (dontwait ? MSG_DONTWAIT : 0) |
+              (nosignal ? MSG_NOSIGNAL : 0) | (confirm ? MSG_CONFIRM : 0);
   ssize_t len;
   clasp_disable_interrupts();
 #if (MSG_NOSIGNAL == 0) && defined(SO_NOSIGPIPE)
   {
     int sockopt = nosignal;
-    setsockopt(fb, SOL_SOCKET, SO_NOSIGPIPE,
-               REINTERPRET_CAST(char *, &sockopt),
-               sizeof(int));
+    setsockopt(fb, SOL_SOCKET, SO_NOSIGPIPE, REINTERPRET_CAST(char*, &sockopt), sizeof(int));
   }
 #endif
-  len = send(sock, REINTERPRET_CAST(char *, buffer), length, flags);
+  len = send(sock, REINTERPRET_CAST(char*, buffer), length, flags);
   clasp_enable_interrupts();
-  return Integer_O::create((gc::Fixnum)(len));
+  return core::Integer_O::create((gc::Fixnum)(len));
 }
 
-#define ARGS_af_ll_socketBind_localSocket "(fd name family)"
-#define DECL_af_ll_socketBind_localSocket ""
-#define DOCS_af_ll_socketBind_localSocket "ll_socketBind_localSocket"
-int af_ll_socketBind_localSocket(int fd, const string &name, int family) {
-  _G();
+CL_LAMBDA(fd name family);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketBind_localSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketBind_localSocket(int fd, const string& name, int family) {
   struct sockaddr_un sockaddr;
   //	size_t size;
   int output;
@@ -505,30 +500,34 @@ int af_ll_socketBind_localSocket(int fd, const string &name, int family) {
   sockaddr.sun_path[sizeof(sockaddr.sun_path) - 1] = '\0';
 
   clasp_disable_interrupts();
-  output = ::bind(fd, (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_un));
+  output = ::bind(fd, (struct sockaddr*)&sockaddr, sizeof(struct sockaddr_un));
   clasp_enable_interrupts();
   return output;
 }
 
-#define ARGS_af_ll_socketAccept_localSocket "(socket-file-descriptor)"
-#define DECL_af_ll_socketAccept_localSocket ""
-#define DOCS_af_ll_socketAccept_localSocket "ll_socketAccept_localSocket"
-T_mv af_ll_socketAccept_localSocket(int socketFileDescriptor) {
-  _G();
+CL_LAMBDA(socket-file-descriptor);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketAccept_localSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_mv sockets_internal__ll_socketAccept_localSocket(int socketFileDescriptor) {
   struct sockaddr_un sockaddr;
   socklen_t addr_len = (socklen_t)sizeof(struct sockaddr_un);
   int new_fd;
   clasp_disable_interrupts();
-  new_fd = accept(socketFileDescriptor, (struct sockaddr *)&sockaddr, &addr_len);
+  new_fd = accept(socketFileDescriptor, (struct sockaddr*)&sockaddr, &addr_len);
   clasp_enable_interrupts();
-  return Values(Integer_O::create((gc::Fixnum)new_fd), (new_fd == -1) ? _Nil<core::Str_O>() : Str_O::create(sockaddr.sun_path));
+  core::T_sp second_ret = nil<core::T_O>();
+  if (new_fd != -1) {
+    second_ret = core::SimpleBaseString_O::make(sockaddr.sun_path);
+  }
+  return Values(core::Integer_O::create((gc::Fixnum)new_fd), second_ret);
 }
 
-#define ARGS_af_ll_socketConnect_localSocket "(fd family path)"
-#define DECL_af_ll_socketConnect_localSocket ""
-#define DOCS_af_ll_socketConnect_localSocket "ll_socketConnect_localSocket"
-int af_ll_socketConnect_localSocket(int fd, int family, const string &path) {
-  _G();
+CL_LAMBDA(fd family path);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketConnect_localSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_socketConnect_localSocket(int fd, int family, const string& path) {
   struct sockaddr_un sockaddr;
   int output;
 #ifdef BSD
@@ -539,211 +538,203 @@ int af_ll_socketConnect_localSocket(int fd, int family, const string &path) {
   sockaddr.sun_path[sizeof(sockaddr.sun_path) - 1] = '\0';
 
   clasp_disable_interrupts();
-  output = connect(fd, (struct sockaddr *)&sockaddr, sizeof(struct sockaddr_un));
+  output = connect(fd, (struct sockaddr*)&sockaddr, sizeof(struct sockaddr_un));
   clasp_enable_interrupts();
 
   return output;
 }
 
-#define ARGS_af_socketPeername_localSocket "(fd)"
-#define DECL_af_socketPeername_localSocket ""
-#define DOCS_af_socketPeername_localSocket "socketPeername_localSocket"
-Str_sp af_socketPeername_localSocket(int fd) {
-  _G();
+CL_LAMBDA(fd);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_socketPeername_localSocket)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__ll_socketPeername_localSocket(int fd) {
   struct sockaddr_un name;
   socklen_t len = sizeof(struct sockaddr_un);
   int ret;
 
   clasp_disable_interrupts();
-  ret = getpeername(fd, (struct sockaddr *)&name, &len);
+  ret = getpeername(fd, (struct sockaddr*)&name, &len);
   clasp_enable_interrupts();
 
   if (ret == 0) {
-    return Str_O::create(name.sun_path);
+    return core::SimpleBaseString_O::make(name.sun_path);
   } else {
-    return _Nil<core::Str_O>();
+    return nil<core::T_O>();
   }
 }
 
-#define ARGS_af_ll_nonBlockingMode "(fd)"
-#define DECL_af_ll_nonBlockingMode ""
-#define DOCS_af_ll_nonBlockingMode "ll_nonBlockingMode"
-int af_ll_nonBlockingMode(int fd) {
-  _G();
-  return fcntl(fd, F_GETFL, NULL) & O_NONBLOCK;
-}
+CL_LAMBDA(fd);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_nonBlockingMode)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_nonBlockingMode(int fd) { return fcntl(fd, F_GETFL, NULL) & O_NONBLOCK; }
 
-#define ARGS_af_ll_setfNonBlockingMode "(fd nblock)"
-#define DECL_af_ll_setfNonBlockingMode ""
-#define DOCS_af_ll_setfNonBlockingMode "ll_setfNonBlockingMode"
-int af_ll_setfNonBlockingMode(int fd, int nblock) {
-  _G();
+CL_LAMBDA(fd nblock);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_setfNonBlockingMode)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_setfNonBlockingMode(int fd, int nblock) {
   int oldflags = fcntl(fd, F_GETFL, NULL);
-  int newflags = (oldflags & ~O_NONBLOCK) |
-                 (nblock ? O_NONBLOCK : 0);
+  int newflags = (oldflags & ~O_NONBLOCK) | (nblock ? O_NONBLOCK : 0);
   clasp_disable_interrupts();
   int ret = fcntl(fd, F_SETFL, newflags);
   clasp_enable_interrupts();
   return ret;
 }
 
-#define ARGS_af_ll_dup "(fd)"
-#define DECL_af_ll_dup ""
-#define DOCS_af_ll_dup "ll_dup"
-int af_ll_dup(int fd) {
-  _G();
-  return dup(fd);
-}
+CL_LAMBDA(fd);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_dup)dx");
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__ll_dup(int fd) { return dup(fd); }
 
-#define ARGS_af_ll_makeStreamFromFd "(name fd stream-mode element-type external-format)"
-#define DECL_af_ll_makeStreamFromFd ""
-#define DOCS_af_ll_makeStreamFromFd "ll_makeStreamFromFd"
-T_sp af_ll_makeStreamFromFd(const string &name,  //#0
-                            int fd,              //#1
-                            int streamMode,      //#2
-                            T_sp elementType,    //#3
-                            T_sp externalFormat) //#4
+CL_LAMBDA(name fd stream-mode element-type external-format);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_makeStreamFromFd)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__ll_makeStreamFromFd(const string& name,        // #0
+                                                          int fd,                    // #1
+                                                          int streamMode,            // #2
+                                                          core::T_sp elementType,    // #3
+                                                          core::T_sp externalFormat) // #4
 {
-  _G();
-  core::StreamMode direction;
+  core::StreamDirection direction;
   switch (streamMode) {
-  case core::clasp_stream_mode_input:
-    direction = clasp_smm_input_file;
+  case static_cast<int>(core::StreamDirection::input):
+    direction = core::StreamDirection::input;
     break;
-  case core::clasp_stream_mode_output:
-    direction = clasp_smm_output_file;
+  case static_cast<int>(core::StreamDirection::output):
+    direction = core::StreamDirection::output;
     break;
-  case core::clasp_stream_mode_io:
-    direction = clasp_smm_io_file;
+  case static_cast<int>(core::StreamDirection::io):
+    direction = core::StreamDirection::io;
     break;
   default: {
-    SIMPLE_ERROR(BF("Illegal stream mode %d") % streamMode);
+    SIMPLE_ERROR("Illegal stream mode {}", streamMode);
   }
   }
-  Stream_sp stream = core::IOFileStream_O::make(name, fd, direction, elementType, externalFormat);
+  core::Stream_sp stream =
+      gc::As_unsafe<core::Stream_sp>(core::CFileStream_O::make(core::str_create(name), fd, direction, elementType, externalFormat));
   return stream;
 }
 
-#define ARGS_af_ll_autoCloseTwoWayStream "(stream)"
-#define DECL_af_ll_autoCloseTwoWayStream ""
-#define DOCS_af_ll_autoCloseTwoWayStream "ll_autoCloseTwoWayStream"
-void af_ll_autoCloseTwoWayStream(Stream_sp stream) {
-  _G();
-#if 0
-	IMPLEMENT_MEF(BF("Handle ECL_STREAM_CLOSE_COMPONENTS"));
-	stream->stream.flags |= ECL_STREAM_CLOSE_COMPONENTS;
-#endif
+CL_LAMBDA(stream);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_autoCloseTwoWayStream)dx");
+DOCGROUP(clasp);
+CL_DEFUN void sockets_internal__ll_autoCloseTwoWayStream(core::AnsiStream_sp stream) {
+  stream->_flags |= core::CLASP_STREAM_CLOSE_COMPONENTS;
 };
 
-#define ARGS_af_ll_strerror "(num)"
-#define DECL_af_ll_strerror ""
-#define DOCS_af_ll_strerror "ll_strerror"
-Str_sp af_ll_strerror(int num) {
-  _G();
-  return Str_O::create(strerror(num));
-}
+CL_LAMBDA(num);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_strerror)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::String_sp sockets_internal__ll_strerror(int num) { return core::SimpleBaseString_O::make(strerror(num)); }
 
-#define ARGS_af_ll_strerror_errno "()"
-#define DECL_af_ll_strerror_errno ""
-#define DOCS_af_ll_strerror_errno "ll_strerror_errno"
-Str_sp af_ll_strerror_errno() {
-  _G();
-  return Str_O::create(strerror(errno));
-}
+CL_LAMBDA();
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_strerror_errno)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::String_sp sockets_internal__ll_strerror_errno() { return core::SimpleBaseString_O::make(strerror(errno)); }
 
-#define ARGS_af_ll_getSockoptInt "(fd level constant)"
-#define DECL_af_ll_getSockoptInt ""
-#define DOCS_af_ll_getSockoptInt "ll_getSockoptInt"
-Integer_sp af_ll_getSockoptInt(int fd, int level, int constant) {
-  _G();
+CL_LAMBDA(fd level constant);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getSockoptInt)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::Integer_sp sockets_internal__ll_getSockoptInt(int fd, int level, int constant) {
   /* (c-inline (fd level const) (:int :int :int) t   ) */
   int sockopt, ret;
   socklen_t socklen = sizeof(int);
 
   clasp_disable_interrupts();
-  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt), &socklen);
+  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), &socklen);
   clasp_enable_interrupts();
 
-  return (ret == 0) ? Integer_O::create((gc::Fixnum)sockopt) : _Nil<core::Integer_O>();
+  return (ret == 0) ? core::Integer_O::create((gc::Fixnum)sockopt) : nil<core::Integer_O>();
 }
 
-#define ARGS_af_ll_getSockoptBool "(fd level constant)"
-#define DECL_af_ll_getSockoptBool ""
-#define DOCS_af_ll_getSockoptBool "ll_getSockoptBool"
-T_sp af_ll_getSockoptBool(int fd, int level, int constant) {
-  _G();
+CL_LAMBDA(fd level constant);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getSockoptBool)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__ll_getSockoptBool(int fd, int level, int constant) {
   int sockopt, ret;
   socklen_t socklen = sizeof(int);
 
   clasp_disable_interrupts();
-  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt), &socklen);
+  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), &socklen);
   clasp_enable_interrupts();
-  return (ret == 0) ? _lisp->_boolean(sockopt) : _Nil<core::T_O>();
+  return (ret == 0) ? _lisp->_boolean(sockopt) : nil<core::T_O>();
 }
 
-#define ARGS_af_ll_getSockoptTimeval "(fd level constant)"
-#define DECL_af_ll_getSockoptTimeval ""
-#define DOCS_af_ll_getSockoptTimeval "ll_getSockoptTimeval"
-DoubleFloat_sp af_ll_getSockoptTimeval(int fd, int level, int constant) {
+CL_LAMBDA(fd level constant);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getSockoptTimeval)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::DoubleFloat_sp sockets_internal__ll_getSockoptTimeval(int fd, int level, int constant) {
   struct timeval tv;
   socklen_t socklen = sizeof(struct timeval);
   int ret;
   clasp_disable_interrupts();
-  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char *, &tv), &socklen);
+  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char*, &tv), &socklen);
   clasp_enable_interrupts();
-  return (ret == 0) ? DoubleFloat_O::create((double)tv.tv_sec + ((double)tv.tv_usec) / 1000000.0) : _Nil<core::DoubleFloat_O>();
+  return (ret == 0) ? core::DoubleFloat_O::create((double)tv.tv_sec + ((double)tv.tv_usec) / 1000000.0)
+                    : nil<core::DoubleFloat_O>();
 }
 
-#define ARGS_af_ll_getSockoptLinger "(fd level constant)"
-#define DECL_af_ll_getSockoptLinger ""
-#define DOCS_af_ll_getSockoptLinger "ll_getSockoptLinger"
-Integer_sp af_ll_getSockoptLinger(int fd, int level, int constant) {
-  _G();
+CL_LAMBDA(fd level constant);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_getSockoptLinger)dx");
+DOCGROUP(clasp);
+CL_DEFUN core::Integer_sp sockets_internal__ll_getSockoptLinger(int fd, int level, int constant) {
   struct linger sockopt;
   socklen_t socklen = sizeof(struct linger);
   int ret;
 
   clasp_disable_interrupts();
-  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt), &socklen);
+  ret = getsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), &socklen);
   clasp_enable_interrupts();
 
-  return (ret == 0) ? Integer_O::create((gc::Fixnum)((sockopt.l_onoff != 0) ? sockopt.l_linger : 0)) : _Nil<core::Integer_O>();
+  return (ret == 0) ? core::Integer_O::create((gc::Fixnum)((sockopt.l_onoff != 0) ? sockopt.l_linger : 0)) : nil<core::Integer_O>();
 }
 
-#define ARGS_af_ll_setSockoptInt "(fd level constant value)"
-#define DECL_af_ll_setSockoptInt ""
-#define DOCS_af_ll_setSockoptInt "ll_setSockoptInt"
-bool af_ll_setSockoptInt(int fd, int level, int constant, int value) {
-  _G();
+CL_LAMBDA(fd level constant value);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_setSockoptInt)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool sockets_internal__ll_setSockoptInt(int fd, int level, int constant, int value) {
   int sockopt = value;
   int ret;
 
   clasp_disable_interrupts();
-  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt), sizeof(int));
+  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), sizeof(int));
   clasp_enable_interrupts();
 
   return (ret == 0) ? true : false;
 }
 
-#define ARGS_af_ll_setSockoptBool "(fd level constant value)"
-#define DECL_af_ll_setSockoptBool ""
-#define DOCS_af_ll_setSockoptBool "ll_setSockoptBool"
-bool af_ll_setSockoptBool(int fd, int level, int constant, bool value) {
-  _G();
+CL_LAMBDA(fd level constant value);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_setSockoptBool)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool sockets_internal__ll_setSockoptBool(int fd, int level, int constant, bool value) {
   int sockopt = value ? 1 : 0;
   int ret;
 
   clasp_disable_interrupts();
-  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt), sizeof(int));
+  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), sizeof(int));
   clasp_enable_interrupts();
 
   return (ret == 0) ? true : false;
 }
 
-#define ARGS_af_ll_setSockoptTimeval "(fd level constant value)"
-#define DECL_af_ll_setSockoptTimeval ""
-#define DOCS_af_ll_setSockoptTimeval "ll_setSockoptTimeval"
-bool af_ll_setSockoptTimeval(int fd, int level, int constant, double value) {
+CL_LAMBDA(fd level constant value);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_setSockoptTimeval)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool sockets_internal__ll_setSockoptTimeval(int fd, int level, int constant, double value) {
   struct timeval tv;
   double tmp = value;
   int ret;
@@ -757,11 +748,11 @@ bool af_ll_setSockoptTimeval(int fd, int level, int constant, double value) {
   return (ret == 0) ? true : false;
 }
 
-#define ARGS_af_ll_setSockoptLinger "(fd level constant value)"
-#define DECL_af_ll_setSockoptLinger ""
-#define DOCS_af_ll_setSockoptLinger "ll_setSockoptLinger"
-bool af_ll_setSockoptLinger(int fd, int level, int constant, int value) {
-  _G();
+CL_LAMBDA(fd level constant value);
+CL_DECLARE();
+CL_DOCSTRING(R"dx(ll_setSockoptLinger)dx");
+DOCGROUP(clasp);
+CL_DEFUN bool sockets_internal__ll_setSockoptLinger(int fd, int level, int constant, int value) {
   struct linger sockopt = {0, 0};
   int ret;
 
@@ -771,178 +762,184 @@ bool af_ll_setSockoptLinger(int fd, int level, int constant, int value) {
   }
 
   clasp_disable_interrupts();
-  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char *, &sockopt),
-                   sizeof(struct linger));
+  ret = setsockopt(fd, level, constant, REINTERPRET_CAST(char*, &sockopt), sizeof(struct linger));
   clasp_enable_interrupts();
 
   return (ret == 0) ? true : false;
 }
 
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__shutdown(int sock_fd, int direction_flag) { return shutdown(sock_fd, direction_flag); }
+
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__errno() { return errno; }
+
+DOCGROUP(clasp);
+CL_DEFUN gc::Fixnum sockets_internal__fd_setsize() { return FD_SETSIZE; }
+
+DOCGROUP(clasp);
+CL_DEFUN void* sockets_internal__alloc_atomic_sizeof_fd_set() { return (void*)malloc(sizeof(fd_set)); }
+
+DOCGROUP(clasp);
+CL_DEFUN void sockets_internal__fdset_zero(core::Pointer_sp p) { FD_ZERO((fd_set*)p->ptr()); }
+
+DOCGROUP(clasp);
+CL_DEFUN void sockets_internal__fdset_set(gc::Fixnum fd, core::Pointer_sp fdset) { FD_SET(fd, (fd_set*)fdset->ptr()); }
+
+DOCGROUP(clasp);
+CL_DEFUN void sockets_internal__fdset_clr(gc::Fixnum fd, core::Pointer_sp fdset) { FD_CLR(fd, (fd_set*)fdset->ptr()); }
+
+DOCGROUP(clasp);
+CL_DEFUN bool sockets_internal__fdset_isset(gc::Fixnum fd, core::Pointer_sp fdset) { return FD_ISSET(fd, (fd_set*)fdset->ptr()); }
+
+DOCGROUP(clasp);
+CL_DEFUN core::T_sp sockets_internal__get_host_name() {
+  char* buf = (char*)malloc(257);
+  if (gethostname(buf, 256) == 0) {
+    core::T_sp result = core::SimpleBaseString_O::make(std::string(buf));
+    free(buf);
+    return result;
+  }
+  free(buf);
+  return nil<core::T_O>();
+}
+
+DOCGROUP(clasp);
+CL_DEFUN int sockets_internal__do_select(core::T_sp to_secs, unsigned int to_musecs, core::Pointer_sp rfds, int max_fd) {
+  struct timeval tv;
+  if (to_secs.fixnump()) {
+    tv.tv_sec = to_secs.unsafe_fixnum();
+    tv.tv_usec = to_musecs;
+  }
+  return select(max_fd + 1, (fd_set*)rfds->ptr(), NULL, NULL, (to_secs.fixnump()) ? &tv : NULL);
+}
+
 void initialize_sockets_globals() {
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_af_inet_PLUS_);
-  _sym__PLUS_af_inet_PLUS_->defconstant(Integer_O::create((gc::Fixnum)AF_INET));
+  _sym__PLUS_af_inet_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)AF_INET));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_af_local_PLUS_);
-  _sym__PLUS_af_local_PLUS_->defconstant(Integer_O::create((gc::Fixnum)AF_UNIX));
+  _sym__PLUS_af_local_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)AF_UNIX));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_sock_dgram_PLUS_);
-  _sym__PLUS_sock_dgram_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SOCK_DGRAM));
+  _sym__PLUS_sock_dgram_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SOCK_DGRAM));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_sock_stream_PLUS_);
-  _sym__PLUS_sock_stream_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SOCK_STREAM));
+  _sym__PLUS_sock_stream_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SOCK_STREAM));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_clasp_stream_mode_input_PLUS_);
-  _sym__PLUS_clasp_stream_mode_input_PLUS_->defconstant(Integer_O::create((gc::Fixnum)(core::clasp_stream_mode_input)));
+  _sym__PLUS_clasp_stream_mode_input_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)(core::StreamDirection::input)));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_clasp_stream_mode_output_PLUS_);
-  _sym__PLUS_clasp_stream_mode_output_PLUS_->defconstant(Integer_O::create((gc::Fixnum)core::clasp_stream_mode_output));
+  _sym__PLUS_clasp_stream_mode_output_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)core::StreamDirection::output));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_clasp_stream_mode_io_PLUS_);
-  _sym__PLUS_clasp_stream_mode_io_PLUS_->defconstant(Integer_O::create((gc::Fixnum)clasp_stream_mode_io));
+  _sym__PLUS_clasp_stream_mode_io_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)core::StreamDirection::io));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EADDRINUSE_PLUS_);
-  _sym__PLUS_EADDRINUSE_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EADDRINUSE));
+  _sym__PLUS_EADDRINUSE_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EADDRINUSE));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EAGAIN_PLUS_);
-  _sym__PLUS_EAGAIN_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EAGAIN));
+  _sym__PLUS_EAGAIN_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EAGAIN));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EBADF_PLUS_);
-  _sym__PLUS_EBADF_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EBADF));
+  _sym__PLUS_EBADF_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EBADF));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ECONNREFUSED_PLUS_);
-  _sym__PLUS_ECONNREFUSED_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ECONNREFUSED));
+  _sym__PLUS_ECONNREFUSED_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ECONNREFUSED));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ETIMEDOUT_PLUS_);
-  _sym__PLUS_ETIMEDOUT_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ETIMEDOUT));
+  _sym__PLUS_ETIMEDOUT_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ETIMEDOUT));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EINTR_PLUS_);
-  _sym__PLUS_EINTR_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EINTR));
+  _sym__PLUS_EINTR_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EINTR));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EINVAL_PLUS_);
-  _sym__PLUS_EINVAL_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EINVAL));
+  _sym__PLUS_EINVAL_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EINVAL));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ENOBUFS_PLUS_);
-  _sym__PLUS_ENOBUFS_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ENOBUFS));
+  _sym__PLUS_ENOBUFS_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ENOBUFS));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ENOMEM_PLUS_);
-  _sym__PLUS_ENOMEM_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ENOMEM));
+  _sym__PLUS_ENOMEM_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ENOMEM));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EOPNOTSUPP_PLUS_);
-  _sym__PLUS_EOPNOTSUPP_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EOPNOTSUPP));
+  _sym__PLUS_EOPNOTSUPP_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EOPNOTSUPP));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EPERM_PLUS_);
-  _sym__PLUS_EPERM_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EPERM));
+  _sym__PLUS_EPERM_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EPERM));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_EPROTONOSUPPORT_PLUS_);
-  _sym__PLUS_EPROTONOSUPPORT_PLUS_->defconstant(Integer_O::create((gc::Fixnum)EPROTONOSUPPORT));
+  _sym__PLUS_EPROTONOSUPPORT_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)EPROTONOSUPPORT));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ESOCKTNOSUPPORT_PLUS_);
-  _sym__PLUS_ESOCKTNOSUPPORT_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ESOCKTNOSUPPORT));
+  _sym__PLUS_ESOCKTNOSUPPORT_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ESOCKTNOSUPPORT));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_ENETUNREACH_PLUS_);
-  _sym__PLUS_ENETUNREACH_PLUS_->defconstant(Integer_O::create((gc::Fixnum)ENETUNREACH));
+  _sym__PLUS_ENETUNREACH_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)ENETUNREACH));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_NETDB_INTERNAL_PLUS_);
-  _sym__PLUS_NETDB_INTERNAL_PLUS_->defconstant(Integer_O::create((gc::Fixnum)NETDB_INTERNAL));
+  _sym__PLUS_NETDB_INTERNAL_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)NETDB_INTERNAL));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_NETDB_SUCCESS_PLUS_);
-  _sym__PLUS_NETDB_SUCCESS_PLUS_->defconstant(Integer_O::create((gc::Fixnum)NETDB_SUCCESS));
+  _sym__PLUS_NETDB_SUCCESS_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)NETDB_SUCCESS));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_HOST_NOT_FOUND_PLUS_);
-  _sym__PLUS_HOST_NOT_FOUND_PLUS_->defconstant(Integer_O::create((gc::Fixnum)HOST_NOT_FOUND));
+  _sym__PLUS_HOST_NOT_FOUND_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)HOST_NOT_FOUND));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_TRY_AGAIN_PLUS_);
-  _sym__PLUS_TRY_AGAIN_PLUS_->defconstant(Integer_O::create((gc::Fixnum)TRY_AGAIN));
+  _sym__PLUS_TRY_AGAIN_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)TRY_AGAIN));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_NO_RECOVERY_PLUS_);
-  _sym__PLUS_NO_RECOVERY_PLUS_->defconstant(Integer_O::create((gc::Fixnum)NO_RECOVERY));
+  _sym__PLUS_NO_RECOVERY_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)NO_RECOVERY));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_NO_ADDRESS_PLUS_);
-  _sym__PLUS_NO_ADDRESS_PLUS_->defconstant(Integer_O::create((gc::Fixnum)NO_ADDRESS));
+  _sym__PLUS_NO_ADDRESS_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)NO_ADDRESS));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SOL_SOCKET_PLUS_);
-  _sym__PLUS_SOL_SOCKET_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SOL_SOCKET));
+  _sym__PLUS_SOL_SOCKET_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SOL_SOCKET));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_IPPROTO_TCP_PLUS_);
-  _sym__PLUS_IPPROTO_TCP_PLUS_->defconstant(Integer_O::create((gc::Fixnum)IPPROTO_TCP));
+  _sym__PLUS_IPPROTO_TCP_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)IPPROTO_TCP));
 
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_TYPE_PLUS_);
-  _sym__PLUS_SO_TYPE_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_TYPE));
+  _sym__PLUS_SO_TYPE_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_TYPE));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_RCVBUF_PLUS_);
-  _sym__PLUS_SO_RCVBUF_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_RCVBUF));
+  _sym__PLUS_SO_RCVBUF_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_RCVBUF));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_RCVTIMEO_PLUS_);
-  _sym__PLUS_SO_RCVTIMEO_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_RCVTIMEO));
+  _sym__PLUS_SO_RCVTIMEO_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_RCVTIMEO));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_SNDTIMEO_PLUS_);
-  _sym__PLUS_SO_SNDTIMEO_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_SNDTIMEO));
+  _sym__PLUS_SO_SNDTIMEO_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_SNDTIMEO));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_REUSEADDR_PLUS_);
-  _sym__PLUS_SO_REUSEADDR_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_REUSEADDR));
+  _sym__PLUS_SO_REUSEADDR_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_REUSEADDR));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_KEEPALIVE_PLUS_);
-  _sym__PLUS_SO_KEEPALIVE_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_KEEPALIVE));
+  _sym__PLUS_SO_KEEPALIVE_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_KEEPALIVE));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_DONTROUTE_PLUS_);
-  _sym__PLUS_SO_DONTROUTE_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_DONTROUTE));
+  _sym__PLUS_SO_DONTROUTE_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_DONTROUTE));
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_LINGER_PLUS_);
-  _sym__PLUS_SO_LINGER_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_LINGER));
+  _sym__PLUS_SO_LINGER_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_LINGER));
 #ifndef _TARGET_OS_LINUX
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_SO_REUSEPORT_PLUS_);
-  _sym__PLUS_SO_REUSEPORT_PLUS_->defconstant(Integer_O::create((gc::Fixnum)SO_REUSEPORT));
+  _sym__PLUS_SO_REUSEPORT_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)SO_REUSEPORT));
 #endif
   SYMBOL_EXPORT_SC_(SocketsPkg, _PLUS_TCP_NODELAY_PLUS_);
-  _sym__PLUS_TCP_NODELAY_PLUS_->defconstant(Integer_O::create((gc::Fixnum)TCP_NODELAY));
+  _sym__PLUS_TCP_NODELAY_PLUS_->defconstant(core::Integer_O::create((gc::Fixnum)TCP_NODELAY));
 };
 
-void initialize_sockets() {
-  SYMBOL_EXPORT_SC_(SocketsPkg, ff_socket);
-  Defun(ff_socket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ff_listen);
-  Defun(ff_listen);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ff_close);
-  Defun(ff_close);
-
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_get_name_service_h_errno);
-  Defun(ll_get_name_service_h_errno);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socket_errno);
-  Defun(ll_socket_errno);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getNameServiceErrorMessage);
-  Defun(ll_getNameServiceErrorMessage);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getHostByName);
-  Defun(ll_getHostByName);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getHostByAddress);
-  Defun(ll_getHostByAddress);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketReceive);
-  Defun(ll_socketReceive);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getProtocolByName);
-  Defun(ll_getProtocolByName);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketBind_inetSocket);
-  Defun(ll_socketBind_inetSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketAccept_inetSocket);
-  Defun(ll_socketAccept_inetSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketConnect_inetSocket);
-  Defun(ll_socketConnect_inetSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketPeername_inetSocket);
-  Defun(ll_socketPeername_inetSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketName);
-  Defun(ll_socketName);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketSendAddress);
-  Defun(ll_socketSendAddress);
-  SYMBOL_EXPORT_SC_(SocketsPkg, socketSendNoAddress);
-  Defun(socketSendNoAddress);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketBind_localSocket);
-  Defun(ll_socketBind_localSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketAccept_localSocket);
-  Defun(ll_socketAccept_localSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketConnect_localSocket);
-  Defun(ll_socketConnect_localSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, socketPeername_localSocket);
-  Defun(socketPeername_localSocket);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_nonBlockingMode);
-  Defun(ll_nonBlockingMode);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_setfNonBlockingMode);
-  Defun(ll_setfNonBlockingMode);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_dup);
-  Defun(ll_dup);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_makeStreamFromFd);
-  Defun(ll_makeStreamFromFd);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_autoCloseTwoWayStream);
-  Defun(ll_autoCloseTwoWayStream);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_strerror);
-  Defun(ll_strerror);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_strerror_errno);
-  Defun(ll_strerror_errno);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptInt);
-  Defun(ll_getSockoptInt);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptBool);
-  Defun(ll_getSockoptBool);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptTimeval);
-  Defun(ll_getSockoptTimeval);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptLinger);
-  Defun(ll_getSockoptLinger);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptInt);
-  Defun(ll_setSockoptInt);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptBool);
-  Defun(ll_setSockoptBool);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptTimeval);
-  Defun(ll_setSockoptTimeval);
-  SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptLinger);
-  Defun(ll_setSockoptLinger);
-}
-};
+SYMBOL_EXPORT_SC_(SocketsPkg, ff_socket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ff_listen);
+SYMBOL_EXPORT_SC_(SocketsPkg, ff_close);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_get_name_service_h_errno);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socket_errno);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getNameServiceErrorMessage);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getHostByName);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getHostByAddress);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketReceive);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getProtocolByName);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketBind_inetSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketAccept_inetSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketConnect_inetSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketPeername_inetSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketName);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketSendAddress);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketSendNoAddress);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketBind_localSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketAccept_localSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketConnect_localSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_socketPeername_localSocket);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_nonBlockingMode);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_setfNonBlockingMode);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_dup);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_makeStreamFromFd);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_autoCloseTwoWayStream);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_strerror);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_strerror_errno);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptInt);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptBool);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptTimeval);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_getSockoptLinger);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptInt);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptBool);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptTimeval);
+SYMBOL_EXPORT_SC_(SocketsPkg, ll_setSockoptLinger);
+}; // namespace sockets

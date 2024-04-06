@@ -1,17 +1,18 @@
+#pragma once
 /*
     File: lightProfiler.h
 */
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -32,18 +33,13 @@ THE SOFTWARE.
 #include <time.h>
 #endif
 
-#include <clasp/core/foundation.h>
-
-#ifndef LightProfiler_H
-#define LightProfiler_H
-
 namespace core {
 
 class LightProfiler;
 
 class LightTimer {
 private:
-  LightProfiler *_Profiler;
+  LightProfiler* _Profiler;
   uint _Id;
   bool _IsOn;
   double _AccumulatedTime;
@@ -56,8 +52,8 @@ private:
   clock_t _StartTime;
 
 public:
-  LightTimer(LightProfiler *profiler = NULL);
-  void setup(uint id, const string &description, uint parent) {
+  LightTimer(LightProfiler* profiler = NULL);
+  void setup(uint id, const string& description, uint parent) {
     this->_Id = id;
     this->_Description = description;
     this->_Parent = parent;
@@ -72,7 +68,7 @@ public:
   uint getClockResolutionFails() { return this->_ClockResolutionFails; };
   uint getChild() { return this->_Child; };
   clock_t getStartTime() { return this->_StartTime; };
-  void setStartTime(const clock_t &t) { this->_StartTime = t; };
+  void setStartTime(const clock_t& t) { this->_StartTime = t; };
 
   void start();
   void stop();
@@ -117,7 +113,7 @@ public:
 
   double getLongestTime();
 
-  uint createTimer(uint parent, const string &name);
+  uint createTimer(uint parent, const string& name);
   uint createEventCounter(string name);
 
   void pushTimerStates();
@@ -125,13 +121,12 @@ public:
 
   void disableMessages();
 
-  LightTimer &timer(uint c);
-  LightEventCounter &eventCounter(uint c);
+  LightTimer& timer(uint c);
+  LightEventCounter& eventCounter(uint c);
 
   void dumpChildTimers(uint level, uint top);
   void dump();
 
   virtual ~LightProfiler();
 };
-};
-#endif
+}; // namespace core

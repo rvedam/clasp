@@ -1,0 +1,114 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.build }}/${{ matrix.os }}/${{ matrix.mode }}/${{ matrix.auto }}
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+        - clasp
+        - cando
+        os:
+        - macos-latest
+        - ubuntu-latest
+        mode:
+        - faso
+        - bytecode-faso
+        - bytecode
+        auto:
+        - no
+        - yes
+        exclude:
+          - mode: faso
+            auto: yes
+          - build: cando
+            mode: faso
+          - build: cando
+            mode: bytecode
+          - build: cando
+            auto: yes
+          - mode: bytecode-faso
+            auto: yes
+          - os: macos-latest
+            mode: faso
+          - os: macos-latest
+            mode: bytecode
+            auto: no
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Install Ubuntu dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt install -y binutils-gold clang-15 libclang-15-dev libclang-cpp15-dev llvm-15 llvm-15-dev libelf-dev libgmp-dev libunwind-dev ninja-build sbcl libnetcdf-dev libexpat1-dev libfmt-dev libboost-all-dev
+
+    - name: Install MacOS dependencies
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew update
+        brew upgrade
+        brew install boost fmt gmp llvm@17 ninja pkg-config sbcl netcdf
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - uses: conda-incubator/setup-miniconda@v3.0.1
+      if: matrix.build == 'cando'
+
+    - name: Install AmberTools
+      if: matrix.build == 'cando'
+      run: |
+        conda install -c conda-forge ambertools
+
+    - name: Clasp koga @ Ubuntu
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.build == 'clasp' }}
+      run: |
+        ./koga --build-mode=${{ matrix.mode }}
+    - name: Cando koga @ Ubuntu
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.build == 'cando' }}
+      run: |
+        ./koga --build-mode=${{ matrix.mode }} --extensions=cando,seqan-clasp
+    - name: Clasp koga @ MacOS
+      if: ${{ matrix.os == 'macos-latest' && matrix.build == 'clasp' }}
+      run: |
+        ./koga --build-mode=${{ matrix.mode }} --llvm-config=/usr/local/opt/llvm@15/bin/llvm-config
+    - name: Cando koga @ MacOS
+      if: ${{ matrix.os == 'macos-latest' && matrix.build == 'cando' }}
+      run: |
+        ./koga --build-mode=${{ matrix.mode }} --extensions=cando,seqan-clasp --llvm-config=/usr/local/opt/llvm@15/bin/llvm-config
+    - name: Build
+      run: |
+        ninja -C build
+    - name: Run regression tests
+      if: ${{ matrix.auto == 'no' }}
+      run: |
+        ninja -C build test
+    - name: Run regression tests [auto]
+      if: ${{ matrix.auto == 'yes' }}
+      run: |
+        CLASP_AUTOCOMPILATION=1 ninja -C build test
+    - name: Run ANSI tests
+      if: ${{ matrix.build == 'clasp' && matrix.auto == 'no' }}
+      run: |
+        ninja -C build ansi-test
+    - name: Run ANSI tests [auto]
+      if: ${{ matrix.build == 'clasp' && matrix.auto == 'yes' }}
+      run: |
+        CLASP_AUTOCOMPILATION=1 ninja -C build ansi-test
+    - name: Run Cando regression tests
+      if: ${{ matrix.build == 'cando' }}
+      run: |
+        ninja -C build cando-test

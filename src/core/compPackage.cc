@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -35,22 +35,33 @@ THE SOFTWARE.
 
 namespace comp {
 
-#pragma GCC visibility push(default)
-#define CompPkg_SYMBOLS
-#define DO_SYMBOL(cname, idx, pkgName, lispName, export) core::Symbol_sp cname;
-#include SYMBOLS_SCRAPED_INC_H
-#undef DO_SYMBOL
-#undef CompPkg_SYMBOLS
-#pragma GCC visibility pop
-
-SYMBOL_SC_(CompPkg, aSingleCompilerSymbol);
-SYMBOL_EXPORT_SC_(CompPkg, STARlowLevelTraceSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARautocompile_hookSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARbtb_compile_hookSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARcodeWalkerSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARcompile_file_parallelSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARdebug_jitSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARdefault_output_typeSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARforce_startup_external_linkageSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARjit_saved_symbol_infoSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARload_time_value_holder_nameSTAR);
 SYMBOL_EXPORT_SC_(CompPkg, STARlowLevelTracePrintSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARlowLevelTraceSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARoptimization_levelSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARoptimizeSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARprimitivesSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARsave_module_for_disassembleSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARsaved_module_from_clasp_jitSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARsourceLocationsSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARthe_moduleSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, STARthread_safe_contextSTAR);
+SYMBOL_EXPORT_SC_(CompPkg, compile_quick_module_dump);
+SYMBOL_EXPORT_SC_(CompPkg, optimize_module_for_compile);
+SYMBOL_EXPORT_SC_(CompPkg, thread_local_llvm_context);
+SYMBOL_SC_(CompPkg, aSingleCompilerSymbol);
 
 void initialize_compPackage() {
   list<string> lnicknames = {"CMP"};
   list<string> luse = {"COMMON-LISP"};
   _lisp->makePackage("COMPILER", lnicknames, luse);
-  // We don't have to create the COMPILER symbols here - it's done in bootStrapCoreSymbolMap
 }
-};
+}; // namespace comp

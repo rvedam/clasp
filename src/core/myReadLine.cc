@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -26,26 +26,26 @@ THE SOFTWARE.
 /* -^- */
 #include <clasp/core/foundation.h>
 #include <clasp/core/object.h>
+#include <clasp/core/bformat.h>
 #include <clasp/core/lisp.h>
 #include <clasp/core/myReadLine.h>
 
 #ifdef READLINE
-extern "C" char *readline(const char *prompt);
-extern "C" void add_history(char *line);
+extern "C" char* readline(const char* prompt);
+extern "C" void add_history(char* line);
 #endif
 
 namespace core {
 
-string myReadLine(const string &prompt, bool &end_of_transmission) {
+string myReadLine(const string& prompt, bool& end_of_transmission) {
   end_of_transmission = false;
   string res;
 #ifdef READLINE
-  char *line_read;
+  char* line_read;
   /* Get a line from the user. */
   //      lisp->print(BF("%s")%prompt);
   stringstream ss;
-  ss << std::endl
-     << prompt;
+  ss << std::endl << prompt;
   line_read = ::readline(ss.str().c_str()); // prompt.c_str());
   if (line_read != NULL) {
     if (*line_read)
@@ -57,10 +57,13 @@ string myReadLine(const string &prompt, bool &end_of_transmission) {
   }
 #else
   if (prompt != "") {
-    _lisp->print(BF("%s ") % prompt);
+    clasp_write_string(fmt::format("{} ", prompt));
   }
+  ws(std::cin);
   getline(std::cin, res);
+  if (res == "")
+    end_of_transmission = true;
 #endif
   return res;
 }
-};
+}; // namespace core

@@ -4,14 +4,14 @@
 
 /*
 Copyright (c) 2014, Christian E. Schafmeister
- 
+
 CLASP is free software; you can redistribute it and/or
 modify it under the terms of the GNU Library General Public
 License as published by the Free Software Foundation; either
 version 2 of the License, or (at your option) any later version.
- 
+
 See directory 'clasp/licenses' for full details.
- 
+
 The above copyright notice and this permission notice shall be included in
 all copies or substantial portions of the Software.
 
@@ -24,10 +24,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 /* -^- */
-#define DEBUG_LEVEL_FULL
+// #define DEBUG_LEVEL_FULL
 
+#include <clasp/core/foundation.h>
 #include <clasp/core/common.h>
-#include <clasp/core/environment.h>
 #include <clasp/core/symbolTable.h>
 #include <clasp/core/hashTableEqual.h>
 #include <clasp/core/wrappers.h>
@@ -36,34 +36,16 @@ namespace core {
 // ----------------------------------------------------------------------
 //
 
-EXPOSE_CLASS(core, HashTableEqual_O);
-
-void HashTableEqual_O::exposeCando(::core::Lisp_sp lisp) {
-  ::core::class_<HashTableEqual_O>()
-      //	.initArgs("(self)")
-      ;
-}
-
-void HashTableEqual_O::exposePython(::core::Lisp_sp lisp) {
-#ifdef USEBOOSTPYTHON
-  PYTHON_CLASS(Pkg(), HashTableEqual, "", "", _LISP)
-      //	.initArgs("(self)")
-      ;
-#endif
-}
-
 HashTableEqual_sp HashTableEqual_O::create(uint sz, Number_sp rehashSize, double rehashThreshold) {
-  _G();
-  GC_ALLOCATE(HashTableEqual_O, hashTable);
+  auto hashTable = gctools::GC<HashTableEqual_O>::allocate_with_default_constructor();
   hashTable->setup(sz, rehashSize, rehashThreshold);
   return hashTable;
 }
 
 SYMBOL_EXPORT_SC_(ClPkg, equal);
 HashTableEqual_sp HashTableEqual_O::create_default() {
-  _G();
   DoubleFloat_sp rhs = DoubleFloat_O::create(2.0);
-  HashTableEqual_sp ht = HashTableEqual_O::create(16, rhs, 1.0);
+  HashTableEqual_sp ht = HashTableEqual_O::create(16, rhs, DEFAULT_REHASH_THRESHOLD);
   return ht;
 }
 
@@ -75,30 +57,11 @@ HashTableEqual_sp HashTableEqual_O::create_default() {
     }
 #endif
 
-#if defined(XML_ARCHIVE)
-void HashTableEqual_O::archiveBase(::core::ArchiveP node) {
-  this->Base::archiveBase(node);
-  // Archive other instance variables here
-}
-#endif // defined(XML_ARCHIVE)
+bool HashTableEqual_O::keyTest(T_sp entryKey, T_sp searchKey) const { return cl__equal(entryKey, searchKey); }
 
-bool HashTableEqual_O::keyTest(T_sp entryKey, T_sp searchKey) const {
-  _OF();
-  return cl_equal(entryKey, searchKey);
+gc::Fixnum HashTableEqual_O::sxhashKey(T_sp obj, gc::Fixnum bound, HashGenerator& hg) const {
+  HashTable_O::sxhash_equal(hg, obj);
+  return hg.hashBound(bound);
 }
 
-gc::Fixnum HashTableEqual_O::sxhashKey(T_sp obj, gc::Fixnum bound, bool willAddKey) const {
-#if defined(DEBUG_HASH_TABLE) && defined(DEBUG_HASH_GENERATOR)
-  HashGenerator hg(this->_DebugHashTable);
-#else
-  HashGenerator hg;
-#endif
-#ifdef USE_MPS
-  HashTable_O::sxhash_equal(hg, obj, willAddKey ? const_cast<mps_ld_t>(&(this->_LocationDependencyTracker)) : NULL);
-#else
-  HashTable_O::sxhash_equal(hg, obj, NULL);
-#endif
-  return hg.hash(bound);
-}
-
-}; /* core */
+}; // namespace core
